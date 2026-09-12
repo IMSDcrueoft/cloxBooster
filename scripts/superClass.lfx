@@ -1,0 +1,32 @@
+class Point {
+    init(x,y){
+        this.x = x;
+        this.y = y;
+    }
+}
+
+class Line < Point {
+    init(x,y,x2,y2){
+        super.init(x,y);
+        this.dir = Point(x2,y2);
+    }
+
+    length(){
+        var dx = this.dir.x - this.x;
+        var dy = this.dir.y - this.y;
+        var v = dx * dx + dy * dy;
+        var t = v;
+        var guess = v;
+        // naive sqrt via newton without math module
+        if (t > 0) {
+            guess = t;
+            for (var i = 0; i < 40; i = i + 1) {
+                guess = (guess + t / guess) / 2;
+            }
+        }
+        print guess;
+    }
+}
+
+var line = Line(1,1,4,5);
+line.length();

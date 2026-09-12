@@ -1,0 +1,8 @@
+class Pair {}
+
+var pair = Pair();
+pair.first = 1;
+pair.milli = 2;
+print pair.first + pair.milli; // 3.
+
+print Pair;

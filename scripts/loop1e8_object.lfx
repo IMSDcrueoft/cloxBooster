@@ -1,0 +1,12 @@
+{
+    var a = {
+        a:nil,b:nil,c:nil,d:nil,e:nil,f:nil,
+        g:nil,h:nil,i:nil,j:nil,k:nil,l:nil
+    };
+
+    var start = (clock() * 1000);
+    for(a.i = 0;a.i < 1e8;){
+        a.i = a.i + 1;
+    }
+    print (clock() * 1000) - start;
+}
