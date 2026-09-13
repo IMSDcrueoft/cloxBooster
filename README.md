@@ -1,5 +1,5 @@
 # cloxBooster
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 
 **cloxBooster** is a trimmed-down fork of the [LoxFlux](https://github.com/IMSDcrueoft/LoxFlux) project(ver 0.10.1). It is a stack-based bytecode virtual machine reimplementation of the cLox interpreter described in "Crafting Interpreters".
 
@@ -31,30 +31,31 @@ Lox is a programming language designed for learning purposes. It is conceived as
 - **Detached static and dynamic objects**: Static objects such as strings/functions, they don't usually bloat very much, so I think it's a viable option not to recycle them.
 - **Compilation-time optimizations**: Provides basic constant folding and super instruction.
 - **Instruction Dispatching**: Use `direct threading code` instead of `switch case` in compilers that support compute goto(clang & gcc).
+- **Slab object allocation**: Fixed-size objects (`ObjUpvalue`, `ObjClosure`, `ObjBoundMethod`, `ObjInstance`) are allocated from per-type slab caches (third-party/slabAllocator) instead of the raw heap, speeding up instantiation. Live units are counted into the GC bookkeeping; idle cache units are not.
 
 ---
 
-#### Performance test — v1.0.0
+#### Performance test
 
-_(AMD Ryzen7-5800X, Windows 11, Use ClangCL/LLVM 20 for cloxBooster & clox)_
+All values are in **seconds** (reported by the `clock()` global).
+v1.3.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 slab-allocation results are the median of repeated runs.
+v1.0.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 (cloxBooster & clox).
 
-All values are in **seconds** (cloxBooster values are reported by the `clock()` global).
-|program|cloxBooster - [1.0.0]|clox|
-|---|---|---|
-|fib30|0.058s|0.076s|
-|fib35|0.597s|0.874s|
-|fib40|6.561s|9.677s|
-|loop 1e8|0.702s|1.109s|
-|global loop 1e8|0.93s|2.044s|
-|binary_trees|2.575s|1.996s|
-|instantiation|0.953s|0.945s|
-|invocation|0.22s|0.235s|
-|method_call|0.135s|0.167s|
-|properties|0.296s|0.377s|
-|trees|4.888s|3.553s|
-|zoo|0.238s|0.282s|
-|zoo_batch(10sec)|6850batch|5398batch|
-
+|program|cloxBooster - [1.3.0]|cloxBooster - [1.0.0]|clox|
+|---|---|---|---|
+|fib30|0.054s|0.058s|0.076s|
+|fib35|0.573s|0.597s|0.874s|
+|fib40|6.457s|6.561s|9.677s|
+|loop 1e8|0.66s|0.702s|1.109s|
+|global loop 1e8|0.865s|0.93s|2.044s|
+|binary_trees|2.42s|2.575s|1.996s|
+|instantiation|0.511s|0.953s|0.945s|
+|invocation|0.224s|0.22s|0.235s|
+|method_call|0.134s|0.135s|0.167s|
+|properties|0.317s|0.296s|0.377s|
+|trees|4.62s|4.888s|3.553s|
+|zoo|0.241s|0.238s|0.282s|
+|zoo_batch(10sec)|—|6850batch|5398batch|
 
 ---
 
@@ -128,9 +129,13 @@ print clock() - start; // elapsed seconds
   - `/eval` : Load file and Run.
 
 ## Licenses
-The project **cloxBooster** is based on `MIT` and has no third-party dependencies.
+The project **cloxBooster** is based on `MIT`.
   - Copyright (c) 2025-2026 IMSDCrueoft
   - License: `MIT`
+
+### Third-party
+  - [slabAllocator](third-party/slabAllocator) (Copyright (c) 2026 IMSDcrueoft, MIT License, [repository](https://github.com/IMSDcrueoft/Slab-Allocator)): a slab allocator used to speed up fixed-size object allocation. See `third-party/slabAllocator/LICENSE` for the full license text.
+  - See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full third-party notices.
 
 ## Other expectations
 1. performance improvements

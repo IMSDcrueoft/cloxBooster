@@ -8,6 +8,7 @@
 #include "hash.h"
 #include "memory.h"
 #include "gc.h"
+#include "allocator.h"
 
 #if DEBUG_LOG_GC
 const C_STR objTypeInfo[] = {
@@ -25,6 +26,27 @@ const C_STR objTypeInfo[] = {
 
 #define ALLOCATE_FLEX_OBJ(type,objectType,byteSize) \
     (type*)allocateObject(byteSize, objectType)
+
+//slab-served objects: fixed size, gc-able, allocated from per-type caches
+#define ALLOCATE_OBJ_SLAB(type, objectType) \
+    (type*)allocateObject_slab(sizeof(type), objectType)
+
+HOT_FUNCTION
+static Obj* allocateObject_slab(uint64_t size, ObjType type) {
+	Obj* object = (Obj*)slab_allocObject(type, size);
+
+	//link the objects
+	OBJ_PTR_SET_NEXT(object, vm.objects);
+	object->type = type;
+	object->isMarked = !vm.gcMark;
+	vm.objects = object;
+
+#if DEBUG_LOG_GC
+	printf("[gc] %p allocate %zu for (%s)\n", (void*)object, size, objTypeInfo[type]);
+#endif
+
+	return object;
+}
 
 HOT_FUNCTION
 static Obj* allocateObject(uint64_t size, ObjType type) {
@@ -60,7 +82,7 @@ static Obj* allocateObject(uint64_t size, ObjType type) {
 HOT_FUNCTION
 ObjUpvalue* newUpvalue(Value* slot, ptrdiff_t offset)
 {
-	ObjUpvalue* upvalue = ALLOCATE_OBJ(ObjUpvalue, OBJ_UPVALUE);
+	ObjUpvalue* upvalue = ALLOCATE_OBJ_SLAB(ObjUpvalue, OBJ_UPVALUE);
 	upvalue->location = slot;
 	upvalue->location_offset = offset;
 	upvalue->closed = NIL_VAL;
@@ -85,7 +107,7 @@ ObjClosure* newClosure(ObjFunction* function) {
 		upvalues[i] = NULL;
 	}
 
-	ObjClosure* closure = ALLOCATE_OBJ(ObjClosure, OBJ_CLOSURE);
+	ObjClosure* closure = ALLOCATE_OBJ_SLAB(ObjClosure, OBJ_CLOSURE);
 	closure->function = function;
 	closure->upvalues = upvalues;
 	closure->upvalueCount = function->upvalueCount;
@@ -95,7 +117,7 @@ ObjClosure* newClosure(ObjFunction* function) {
 
 ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* method)
 {
-	ObjBoundMethod* bound = ALLOCATE_OBJ(ObjBoundMethod, OBJ_BOUND_METHOD);
+	ObjBoundMethod* bound = ALLOCATE_OBJ_SLAB(ObjBoundMethod, OBJ_BOUND_METHOD);
 	bound->receiver = receiver;
 	bound->method = method;
 	return bound;
@@ -121,7 +143,7 @@ ObjClass* newClass(ObjString* name)
 
 HOT_FUNCTION
 ObjInstance* newInstance(ObjClass* klass) {
-	ObjInstance* instance = ALLOCATE_OBJ(ObjInstance, OBJ_INSTANCE);
+	ObjInstance* instance = ALLOCATE_OBJ_SLAB(ObjInstance, OBJ_INSTANCE);
 	instance->klass = klass;
 	instance->fields.isGlobal = false;
 	instance->fields.isFrozen = false;

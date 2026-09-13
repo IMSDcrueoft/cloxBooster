@@ -78,7 +78,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories></AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third-party\slabAllocator\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
@@ -101,7 +101,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
-      <AdditionalIncludeDirectories></AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third-party\slabAllocator\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAs>Default</CompileAs>
       <Optimization>MaxSpeed</Optimization>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -126,7 +126,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories></AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third-party\slabAllocator\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <FloatingPointModel>Strict</FloatingPointModel>
@@ -151,7 +151,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
-      <AdditionalIncludeDirectories></AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third-party\slabAllocator\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAs>Default</CompileAs>
       <Optimization>MaxSpeed</Optimization>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -169,6 +169,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="third-party\slabAllocator\includes\bits.c" />
+    <ClCompile Include="third-party\slabAllocator\includes\slab.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="src\file.c" />
     <ClCompile Include="src\hash.c" />
@@ -207,6 +209,8 @@
     <ClInclude Include="src\version.h" />
     <ClInclude Include="src\vm.h" />
     <ClInclude Include="src\allocator.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\bits.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\slab.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

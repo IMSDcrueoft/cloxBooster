@@ -47,11 +47,13 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# No third-party dependencies: hashing uses the built-in MurmurHash64 and
-# allocation goes through the standard library.
+# Third-party: the bundled slabAllocator (third-party/slabAllocator) speeds up
+# fixed-size object allocation; everything else is built-in.
 
 # Core library --------------------------------------------------------------
 set(CLOXBOOSTER_CORE_SOURCES
+  third-party/slabAllocator/includes/bits.c
+  third-party/slabAllocator/includes/slab.c
   src/file.c
   src/hash.c
   src/chunk.c
@@ -73,6 +75,7 @@ set(CLOXBOOSTER_CORE_SOURCES
 add_library(cloxBoosterCore STATIC ${CLOXBOOSTER_CORE_SOURCES})
 target_include_directories(cloxBoosterCore PUBLIC
   ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/third-party/slabAllocator/includes
 )
 
 # Executable ----------------------------------------------------------------
