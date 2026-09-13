@@ -530,7 +530,6 @@ static InterpretResult run()
 
 #define READ_BYTE() (*(ip++))
 #define READ_SHORT() (ip += 2, (uint16_t)(ip[-2] | (ip[-1] << 8)))
-#define READ_24bits() (ip += 3, (uint32_t)(ip[-3] | (ip[-2] << 8) | (ip[-1] << 16)))
 #define READ_CONSTANT(index) (vm.constants.values[(index)])
 
 	// push(pop() op pop())
@@ -591,20 +590,20 @@ static InterpretResult run()
 		{
 		case OP_CONSTANT: {
 		label_op_constant:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			stack_push(constant);
 			NEXT_INSTRUCTION;
 		}
 		case OP_CLOSURE: {
 		label_op_closure:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjFunction* function = AS_FUNCTION(constant);
 			ObjClosure* closure = newClosure(function);
 			stack_push(OBJ_VAL(closure));
 
 			for (uint32_t i = 0; i < closure->upvalueCount; i++) {
 				uint8_t isLocal = READ_BYTE();
-				uint16_t index = READ_SHORT();
+				uint8_t index = READ_BYTE();
 				if (isLocal) {
 					closure->upvalues[i] = captureUpvalue(frame->slots + index);
 				}
@@ -616,14 +615,14 @@ static InterpretResult run()
 		}
 		case OP_CLASS: {
 		label_op_class:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 			stack_push(OBJ_VAL(newClass(name)));
 			NEXT_INSTRUCTION;
 		}
 		case OP_METHOD: {
 		label_op_method:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 			defineMethod(name);
 			NEXT_INSTRUCTION;
@@ -644,7 +643,7 @@ static InterpretResult run()
 		}
 		case OP_GET_SUPER: {
 		label_op_get_super:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 			ObjClass* superclass = AS_CLASS(stack_pop());
 			bindMethod(superclass, name);
@@ -658,7 +657,7 @@ static InterpretResult run()
 			}
 
 			ObjInstance* instance = AS_INSTANCE(vm.stackTop[-1]);
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 
 			Value value;
@@ -680,7 +679,7 @@ static InterpretResult run()
 			}
 
 			ObjInstance* instance = AS_INSTANCE(vm.stackTop[-2]);
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 			if (NOT_NIL(vm.stackTop[-1])) {
 				tableSet(&instance->fields, name, vm.stackTop[-1]);
@@ -695,7 +694,7 @@ static InterpretResult run()
 		case OP_GET_INDEX: {
 		label_op_get_index:
 			Value target = vm.stackTop[-1];
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			double num_index = AS_NUMBER(constant);
 
 			if (IS_STRING(target)) {
@@ -798,7 +797,7 @@ static InterpretResult run()
 		}
 		case OP_DEFINE_GLOBAL: {
 		label_op_define_global:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 
 			//it's not a new key,no cache
@@ -808,7 +807,7 @@ static InterpretResult run()
 		}
 		case OP_GET_GLOBAL: {
 		label_op_get_global:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 
 			//inline find by cache symbol
@@ -832,7 +831,7 @@ static InterpretResult run()
 		}
 		case OP_SET_GLOBAL: {
 		label_op_set_global:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 
 			//inline find by cache symbol(if we found it,it's not new key)
@@ -861,7 +860,7 @@ static InterpretResult run()
 		case OP_NEW_PROPERTY: {
 		label_op_new_property:
 			ObjInstance* instance = AS_INSTANCE(vm.stackTop[-2]);
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* name = AS_STRING(constant);
 			tableSet(&instance->fields, name, vm.stackTop[-1]);
 			stack_pop();
@@ -1003,27 +1002,27 @@ static InterpretResult run()
 		}
 		case OP_GET_LOCAL: {
 		label_op_get_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			stack_push(frame->slots[index]);
 			NEXT_INSTRUCTION;
 		}
 		case OP_SET_LOCAL: {
 		label_op_set_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			frame->slots[index] = vm.stackTop[-1];
 			NEXT_INSTRUCTION;
 		}
 		case OP_SET_LOCAL_POP: {
 		label_op_set_local_pop:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			frame->slots[index] = vm.stackTop[-1];
 			vm.stackTop--;
 			NEXT_INSTRUCTION;
 		}
 		case OP_MOVE_LOCAL: {
 		label_op_move_local:
-			uint32_t indexSrc = READ_SHORT();
-			uint32_t indexDes = READ_SHORT();
+			uint32_t indexSrc = READ_BYTE();
+			uint32_t indexDes = READ_BYTE();
 			frame->slots[indexDes] = frame->slots[indexSrc];
 			NEXT_INSTRUCTION;
 		}
@@ -1090,7 +1089,7 @@ static InterpretResult run()
 		}
 		case OP_INVOKE: {
 		label_op_invoke:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* method = AS_STRING(constant);
 			uint8_t argCount = READ_BYTE();
 
@@ -1105,7 +1104,7 @@ static InterpretResult run()
 		}
 		case OP_SUPER_INVOKE: {
 		label_op_super_invoke:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			ObjString* method = AS_STRING(constant);
 			uint8_t argCount = READ_BYTE();
 
@@ -1137,7 +1136,7 @@ static InterpretResult run()
 		}
 		case OP_ADD_CONST: {
 		label_op_add_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			// might cause gc,so can't decrease first
 			if (IS_NUMBER(vm.stackTop[-1]) && IS_NUMBER(constant)) {
 				vm.stackTop[-1] = NUMBER_VAL(AS_NUMBER(vm.stackTop[-1]) + AS_NUMBER(constant));
@@ -1154,25 +1153,25 @@ static InterpretResult run()
 		}
 		case OP_SUBTRACT_CONST: {
 		label_op_subtract_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, constant, -);
 			NEXT_INSTRUCTION;
 		}
 		case OP_MULTIPLY_CONST: {
 		label_op_multiply_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, constant, *);
 			NEXT_INSTRUCTION;
 		}
 		case OP_DIVIDE_CONST: {
 		label_op_divide_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, constant, / );
 			NEXT_INSTRUCTION;
 		}
 		case OP_MODULUS_CONST: {
 		label_op_modulus_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			/* Pop the top two values from the stack */
 			if (IS_NUMBER(vm.stackTop[-1]) && IS_NUMBER(constant)) {
 				/* Perform the operation and push the result back */
@@ -1186,44 +1185,44 @@ static InterpretResult run()
 		}
 		case OP_EQUAL_CONST: {
 		label_op_equal_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			vm.stackTop[-1] = BOOL_VAL(valuesEqual(vm.stackTop[-1], constant));
 			NEXT_INSTRUCTION;
 		}
 		case OP_NOT_EQUAL_CONST: {
 		label_op_not_equal_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			vm.stackTop[-1] = BOOL_VAL(!valuesEqual(vm.stackTop[-1], constant));
 			NEXT_INSTRUCTION;
 		}
 		case OP_GREATER_CONST: {
 		label_op_greater_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, constant, > );
 			NEXT_INSTRUCTION;
 		}
 		case OP_LESS_CONST: {
 		label_op_less_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, constant, < );
 			NEXT_INSTRUCTION;
 		}
 		case OP_GREATER_EQUAL_CONST: {
 		label_op_greater_equal_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, constant, >= );
 			NEXT_INSTRUCTION;
 		}
 		case OP_LESS_EQUAL_CONST: {
 		label_op_less_equal_const:
-			Value constant = READ_CONSTANT(READ_24bits());
+			Value constant = READ_CONSTANT(READ_SHORT());
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, constant, <= );
 			NEXT_INSTRUCTION;
 		}
 
 		case OP_ADD_LOCAL: {
 		label_op_add_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			// might cause gc,so can't decrease first
@@ -1242,7 +1241,7 @@ static InterpretResult run()
 		}
 		case OP_SUBTRACT_LOCAL: {
 		label_op_subtract_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, local, -);
@@ -1250,7 +1249,7 @@ static InterpretResult run()
 		}
 		case OP_MULTIPLY_LOCAL: {
 		label_op_multiply_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, local, *);
@@ -1258,7 +1257,7 @@ static InterpretResult run()
 		}
 		case OP_DIVIDE_LOCAL: {
 		label_op_divide_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			BINARY_OP_WITH_RIGHT(NUMBER_VAL, local, / );
@@ -1266,7 +1265,7 @@ static InterpretResult run()
 		}
 		case OP_MODULUS_LOCAL: {
 		label_op_modulus_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			/* Pop the top two values from the stack */
@@ -1282,42 +1281,42 @@ static InterpretResult run()
 		}
 		case OP_EQUAL_LOCAL: {
 		label_op_equal_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			vm.stackTop[-1] = BOOL_VAL(valuesEqual(vm.stackTop[-1], local));
 			NEXT_INSTRUCTION;
 		}
 		case OP_NOT_EQUAL_LOCAL: {
 		label_op_not_equal_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			vm.stackTop[-1] = BOOL_VAL(!valuesEqual(vm.stackTop[-1], local));
 			NEXT_INSTRUCTION;
 		}
 		case OP_GREATER_LOCAL: {
 		label_op_greater_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, local, > );
 			NEXT_INSTRUCTION;
 		}
 		case OP_LESS_LOCAL: {
 		label_op_less_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, local, < );
 			NEXT_INSTRUCTION;
 		}
 		case OP_GREATER_EQUAL_LOCAL: {
 		label_op_greater_equal_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, local, >= );
 			NEXT_INSTRUCTION;
 		}
 		case OP_LESS_EQUAL_LOCAL: {
 		label_op_less_equal_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 			BINARY_OP_WITH_RIGHT(BOOL_VAL, local, <= );
 			NEXT_INSTRUCTION;
@@ -1325,7 +1324,7 @@ static InterpretResult run()
 
 		case OP_NOT_LOCAL: {
 		label_op_not_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			stack_push(BOOL_VAL(isFalsey(local)));
@@ -1333,7 +1332,7 @@ static InterpretResult run()
 		}
 		case OP_NEGATE_LOCAL: {
 		label_op_negate_local:
-			uint32_t index = READ_SHORT();
+			uint32_t index = READ_BYTE();
 			Value local = frame->slots[index];
 
 			if (IS_NUMBER(local)) {
@@ -1351,7 +1350,6 @@ static InterpretResult run()
 	//the place the error happens
 #undef READ_BYTE
 #undef READ_SHORT
-#undef READ_24bits
 #undef READ_CONSTANT
 #undef BINARY_OP
 #undef BINARY_OP_WITH_RIGHT

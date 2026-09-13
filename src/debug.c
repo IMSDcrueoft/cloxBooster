@@ -40,34 +40,35 @@ static uint32_t shortInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
 
 COLD_FUNCTION
 static uint32_t localToLocalInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
-	uint32_t srcIndex = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8);
-	uint32_t desIndex = ((uint32_t)chunk->code[offset + 3]) | ((uint32_t)chunk->code[offset + 4] << 8);
+	//8-bit indexes
+	uint32_t srcIndex = chunk->code[offset + 1];
+	uint32_t desIndex = chunk->code[offset + 2];
 	printf("%-16s Rs:%4d  Rd:%4d\n", name, srcIndex, desIndex);
-	return offset + 5;
+	return offset + 3;
 }
 
 COLD_FUNCTION
 static uint32_t constantInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
-	//24bit index
-	uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8) | ((uint32_t)chunk->code[offset + 3] << 16);
+	//16bit index
+	uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8);
 
 	printf("%-16s %4d '", name, constant);
 	printValue(vm.constants.values[constant]);
 	printf("'\n");
 
-	//OP_CONSTANT 4
-	return offset + 4;
+	//OP_CONSTANT 3
+	return offset + 3;
 }
 
 COLD_FUNCTION
 static uint32_t invokeInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
-	//24bit index
-	uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8) | ((uint32_t)chunk->code[offset + 3] << 16);
-	uint8_t argCount = chunk->code[offset + 4];
+	//16bit index
+	uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8);
+	uint8_t argCount = chunk->code[offset + 3];
 	printf("%-16s (%d args) %4d '", name, argCount, constant);
 	printValue(vm.constants.values[constant]);
 	printf("'\n");
-	return offset + 5;
+	return offset + 4;
 }
 
 COLD_FUNCTION
@@ -113,24 +114,23 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return constantInstruction("OP_CONSTANT", chunk, offset);
 
 	case OP_CLOSURE: {
-		//24bit index
-		uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8) | ((uint32_t)chunk->code[offset + 3] << 16);
+		//16bit index
+		uint32_t constant = ((uint32_t)chunk->code[offset + 1]) | ((uint32_t)chunk->code[offset + 2] << 8);
 
 		printf("%-16s %4d '", "OP_CLOSURE", constant);
 		printValue(vm.constants.values[constant]);
 		printf("'\n");
 
-		//OP_CONSTANT 4
-		offset += 4;
+		//OP_CLOSURE 3 (opcode + 16-bit index)
+		offset += 3;
 
 		ObjFunction* function = AS_FUNCTION(vm.constants.values[constant]);
 		for (uint32_t j = 0; j < function->upvalueCount; j++) {
 			int32_t isLocal = chunk->code[offset++];
 			uint16_t index = chunk->code[offset++];
-			index |= (chunk->code[offset++] << 8);
 
 			printf("%04d      |                     %s %d\n",
-				offset - 3, isLocal ? "local" : "upvalue", index);
+				offset - 2, isLocal ? "local" : "upvalue", index);
 		}
 		return offset;
 	}
@@ -192,11 +192,11 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return constantInstruction("OP_NEW_PROPERTY", chunk, offset);
 
 	case OP_GET_LOCAL:
-		return shortInstruction("OP_GET_LOCAL", chunk, offset);
+		return byteInstruction("OP_GET_LOCAL", chunk, offset);
 	case OP_SET_LOCAL:
-		return shortInstruction("OP_SET_LOCAL", chunk, offset);
+		return byteInstruction("OP_SET_LOCAL", chunk, offset);
 	case OP_SET_LOCAL_POP:
-		return shortInstruction("OP_SET_LOCAL_POP", chunk, offset);
+		return byteInstruction("OP_SET_LOCAL_POP", chunk, offset);
 	case OP_MOVE_LOCAL:
 		return localToLocalInstruction("OP_MOVE_LOCAL", chunk, offset);
 	case OP_POP_N:
@@ -236,32 +236,32 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return constantInstruction("OP_LESS_EQUAL_CONST", chunk, offset);
 
 	case OP_ADD_LOCAL:
-		return shortInstruction("OP_ADD_LOCAL", chunk, offset);
+		return byteInstruction("OP_ADD_LOCAL", chunk, offset);
 	case OP_SUBTRACT_LOCAL:
-		return shortInstruction("OP_SUBTRACT_LOCAL", chunk, offset);
+		return byteInstruction("OP_SUBTRACT_LOCAL", chunk, offset);
 	case OP_MULTIPLY_LOCAL:
-		return shortInstruction("OP_MULTIPLY_LOCAL", chunk, offset);
+		return byteInstruction("OP_MULTIPLY_LOCAL", chunk, offset);
 	case OP_DIVIDE_LOCAL:
-		return shortInstruction("OP_DIVIDE_LOCAL", chunk, offset);
+		return byteInstruction("OP_DIVIDE_LOCAL", chunk, offset);
 	case OP_MODULUS_LOCAL:
-		return shortInstruction("OP_MODULUS_LOCAL", chunk, offset);
+		return byteInstruction("OP_MODULUS_LOCAL", chunk, offset);
 	case OP_NOT_LOCAL:
-		return shortInstruction("OP_NOT_LOCAL", chunk, offset);
+		return byteInstruction("OP_NOT_LOCAL", chunk, offset);
 	case OP_NEGATE_LOCAL:
-		return shortInstruction("OP_NEGATE_LOCAL", chunk, offset);
+		return byteInstruction("OP_NEGATE_LOCAL", chunk, offset);
 
 	case OP_EQUAL_LOCAL:
-		return shortInstruction("OP_EQUAL_LOCAL", chunk, offset);
+		return byteInstruction("OP_EQUAL_LOCAL", chunk, offset);
 	case OP_NOT_EQUAL_LOCAL:
-		return shortInstruction("OP_NOT_EQUAL_LOCAL", chunk, offset);
+		return byteInstruction("OP_NOT_EQUAL_LOCAL", chunk, offset);
 	case OP_GREATER_LOCAL:
-		return shortInstruction("OP_GREATER_LOCAL", chunk, offset);
+		return byteInstruction("OP_GREATER_LOCAL", chunk, offset);
 	case OP_GREATER_EQUAL_LOCAL:
-		return shortInstruction("OP_GREATER_EQUAL_LOCAL", chunk, offset);
+		return byteInstruction("OP_GREATER_EQUAL_LOCAL", chunk, offset);
 	case OP_LESS_LOCAL:
-		return shortInstruction("OP_LESS_LOCAL", chunk, offset);
+		return byteInstruction("OP_LESS_LOCAL", chunk, offset);
 	case OP_LESS_EQUAL_LOCAL:
-		return shortInstruction("OP_LESS_EQUAL_LOCAL", chunk, offset);
+		return byteInstruction("OP_LESS_EQUAL_LOCAL", chunk, offset);
 
 	default:
 		printf("Unknown opcode %d offset = %d\n", instruction, offset);

@@ -1,5 +1,5 @@
 # cloxBooster
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 
 **cloxBooster** is a trimmed-down fork of the [LoxFlux](https://github.com/IMSDcrueoft/LoxFlux) project(ver 0.10.1). It is a stack-based bytecode virtual machine reimplementation of the cLox interpreter described in "Crafting Interpreters".
 
@@ -20,8 +20,8 @@ Lox is a programming language designed for learning purposes. It is conceived as
 #### Performance
 
 - **Shared constants**: Use a shared constant table instead of a function holding its own constant table individually.
-- **Constant range**: Expands from `0xff` to `0x00ffffff` (16,777,215)(will reduce perf).
-- **Local variable range**: Expands to support up to 1023 nested variables(Configurable up to 65534).
+- **Compact constant encoding**: Constant indexes are encoded in 2 bytes in the bytecode (shared constants table, with deduplication), supporting up to 65,536 constants.
+- **Compact local variable encoding**: Local variable slot indexes are encoded in a single byte in the bytecode (including the super-instruction `*_LOCAL` family and `OP_MOVE_LOCAL`), keeping every local-access instruction at 2 bytes. Up to 254 nested local variables per function are supported.
 - **Constant deduplication**: For both numbers and strings.
 - **Optimized global variable access**: Achieves `O(1)` time complexity, the access overhead is close to that of local variables. With dynamic update key indexes, direct index fetching can be achieved in almost all cases. Indexes are rarely invalidated, unless you frequently declare new global variables.
 - **Optional object header compression**: Object headers are compressed from 16 bytes to 8 bytes by compressing the 64-bit pointer to 48 bits.

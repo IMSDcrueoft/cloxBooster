@@ -23,8 +23,7 @@ typedef char* STR;
 typedef const char* C_STR;
 
 #define UINT8_COUNT 0x100
-#define UINT24_MAX 0xffffff
-#define UINT24_COUNT 0x1000000
+//constant index is now 16-bit
 
 #ifndef max
 #define max(a,b) (((a) > (b)) ? (a) : (b))

@@ -12,8 +12,8 @@
 #define COMPILATION_TIME_OPTIMIZATION 1
 
 #define LOCAL_INIT 64
-//local var
-#define LOCAL_MAX 1024
+//local var (index is limited to 1 byte)
+#define LOCAL_MAX 255
 //object literal
 #define OBJECT_MAX_NESTING 12
 //function nesting
