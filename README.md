@@ -48,7 +48,7 @@ v1.0.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 (cloxBooster & clox).
 |fib40|6.457s|6.561s|9.677s|
 |loop 1e8|0.66s|0.702s|1.109s|
 |global loop 1e8|0.865s|0.93s|2.044s|
-|binary_trees|2.42s|2.575s|1.996s|
+|binary_trees|1.78s|2.575s|1.996s|
 |instantiation|0.511s|0.953s|0.945s|
 |invocation|0.224s|0.22s|0.235s|
 |method_call|0.134s|0.135s|0.167s|
