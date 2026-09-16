@@ -25,7 +25,15 @@ typedef enum {
 	OBJ_CLASS,
 	OBJ_INSTANCE,
 
+	OBJ_TOTAL_COUNT,
 } ObjType;
+
+//object types served by the slab allocator (fixed size, gc-able)
+#define SLAB_OBJ_TYPES	\
+	OBJ_UPVALUE,		\
+	OBJ_CLOSURE,		\
+	OBJ_BOUND_METHOD,	\
+	OBJ_INSTANCE
 
 #if DEBUG_LOG_GC
 extern const C_STR objTypeInfo[];
