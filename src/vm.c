@@ -144,6 +144,11 @@ static Value clockNative(int argCount, Value* args) {
 COLD_FUNCTION
 void vm_init()
 {
+	//reserve the slab segment first
+	if (!slab_init()) {
+		exit(1);
+	}
+
 	vm.stack = NULL;
 	vm.stackTop = NULL;
 	vm.stackBoundary = NULL;
@@ -227,6 +232,12 @@ void vm_free()
 
 	vm.ip_error = NULL;
 	table_free(&vm.emptyClass.methods);
+
+#if LOG_MALLOC_INFO
+	slab_log_info();
+#endif
+	//all slab objects are gone, release the segment
+	slab_shutdown();
 }
 
 uint32_t getConstantSize()
@@ -633,6 +644,11 @@ static InterpretResult run()
 			if (IS_CLASS(superclass)) {
 				ObjClass* subclass = AS_CLASS(vm.stackTop[-1]);
 				tableAddAll(&AS_CLASS(superclass)->methods, &subclass->methods);
+				//inherited constructor:keep the initializer fast path in sync with the copied methods table
+				//(a subclass init declared after this would overwrite it via defineMethod)
+				if (IS_NIL(subclass->initializer)) {
+					subclass->initializer = AS_CLASS(superclass)->initializer;
+				}
 				stack_pop(); // Subclass.
 			}
 			else {

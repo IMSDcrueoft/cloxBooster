@@ -74,7 +74,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;LOG_MALLOC_STATS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -122,7 +122,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;LOG_MALLOC_STATS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -170,7 +170,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="third-party\slabAllocator\includes\bits.c" />
-    <ClCompile Include="third-party\slabAllocator\includes\slab.c" />
+    <ClCompile Include="third-party\slabAllocator\includes\palloc_os.c" />
+    <ClCompile Include="third-party\slabAllocator\includes\arena_slab.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="src\file.c" />
     <ClCompile Include="src\hash.c" />
@@ -210,7 +211,8 @@
     <ClInclude Include="src\vm.h" />
     <ClInclude Include="src\allocator.h" />
     <ClInclude Include="third-party\slabAllocator\includes\bits.h" />
-    <ClInclude Include="third-party\slabAllocator\includes\slab.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\palloc_os.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\arena_slab.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

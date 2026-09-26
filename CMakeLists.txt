@@ -53,7 +53,8 @@ endif()
 # Core library --------------------------------------------------------------
 set(CLOXBOOSTER_CORE_SOURCES
   third-party/slabAllocator/includes/bits.c
-  third-party/slabAllocator/includes/slab.c
+  third-party/slabAllocator/includes/palloc_os.c
+  third-party/slabAllocator/includes/arena_slab.c
   src/file.c
   src/hash.c
   src/chunk.c
@@ -77,6 +78,10 @@ target_include_directories(cloxBoosterCore PUBLIC
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/third-party/slabAllocator/includes
 )
+# Slab statistics (arena_slab.c counters + dump) in Debug builds only; the
+# define changes Segment/ArenaSlabAllocator layout, so it must be consistent
+# across every TU that compiles arena_slab.c or includes arena_slab.h.
+target_compile_definitions(cloxBoosterCore PRIVATE $<$<CONFIG:Debug>:LOG_MALLOC_STATS>)
 
 # Executable ----------------------------------------------------------------
 add_executable(cloxBooster main.c)
