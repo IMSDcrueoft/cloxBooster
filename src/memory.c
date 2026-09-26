@@ -77,6 +77,11 @@ void slab_freeObject(size_t size, void* pointer)
 	arenaSlab_free(&arenaSlabDefault, pointer);
 }
 
+bool slab_owns(void* pointer)
+{
+	return arenaSlab_which(&arenaSlabDefault, pointer) != SLAB_LAYER_NONE;
+}
+
 void* reallocate_no_gc(void* pointer, uint64_t oldSize, uint64_t newSize)
 {
 	vm.bytesAllocated_no_gc += newSize - oldSize;
@@ -139,6 +144,88 @@ void* reallocate(void* pointer, uint64_t oldSize, uint64_t newSize)
 	if (result == NULL) {
 		fprintf(stderr, "Memory reallocation failed!\n");
 		exit(1);
+	}
+
+	return result;
+}
+
+//slab-routed variant dedicated to the table entries arrays (see
+//ALLOCATE_SLAB/FREE_ARRAY_SLAB): fresh allocations and in-limit growth are
+//delegated to arenaSlab_realloc (<= 256B); crossing the slab limit migrates
+//the block to the standard allocator; free/grow always pairs with the block's
+//true owner via the ownership check
+void* reallocate_slab(void* pointer, uint64_t oldSize, uint64_t newSize)
+{
+	vm.bytesAllocated += newSize - oldSize;
+
+	if (newSize > oldSize) {
+#if DEBUG_STRESS_GC
+		garbageCollect();
+#endif
+		if (vm.bytesAllocated > vm.nextGC) {
+			garbageCollect();
+		}
+	}
+
+	if (newSize == 0) {
+		if (pointer != NULL) {
+#if LOG_EACH_MALLOC_INFO
+			printf("[mem] free %p\n", pointer);
+#endif
+			//pairs by ownership: slab blocks go back to the slab, heap blocks to free()
+			if (!arenaSlab_free(&arenaSlabDefault, pointer)) {
+				mem_free(pointer);
+			}
+		}
+
+		return NULL;
+	}
+
+	if (pointer != NULL && !slab_owns(pointer)) {
+		//heap block: standard realloc
+		void* result = mem_realloc(pointer, newSize);
+
+		if (result == NULL) {
+			fprintf(stderr, "Memory reallocation failed!\n");
+			exit(1);
+		}
+
+		return result;
+	}
+
+	if (pointer != NULL && newSize > SLAB_MAX_ALLOC) {
+		//crossing the slab limit: arenaSlab_realloc frees the old block
+		//without a migration path here, so move it to the heap ourselves
+		void* result = mem_alloc(newSize);
+
+		if (result == NULL) {
+			fprintf(stderr, "Memory reallocation failed!\n");
+			exit(1);
+		}
+
+		memcpy(result, pointer, oldSize < newSize ? (size_t)oldSize : (size_t)newSize);
+		arenaSlab_free(&arenaSlabDefault, pointer);
+		return result;
+	}
+
+	//fresh allocation or in-limit growth: arenaSlab_realloc handles
+	//alloc / grow-in-place / copy; NULL on failure
+	void* result = arenaSlab_realloc(&arenaSlabDefault, pointer, newSize);
+
+	if (result == NULL) {
+		//slab failure (segment exhausted): fall back to the heap; in-limit
+		//failures leave the old block untouched, so migrate it ourselves
+		result = mem_alloc(newSize);
+
+		if (result == NULL) {
+			fprintf(stderr, "Memory reallocation failed!\n");
+			exit(1);
+		}
+
+		if (pointer != NULL) {
+			memcpy(result, pointer, oldSize < newSize ? (size_t)oldSize : (size_t)newSize);
+			arenaSlab_free(&arenaSlabDefault, pointer);
+		}
 	}
 
 	return result;

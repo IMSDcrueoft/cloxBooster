@@ -30,3 +30,8 @@ void slab_shutdown();
 
 void* slab_allocObject(size_t size);
 void slab_freeObject(size_t size, void* pointer);
+
+//raw primitives for the slab-routed array path (no gc bookkeeping here)
+#define SLAB_MAX_ALLOC ((size_t)SLOT_SIZE_MAX)
+//true when the pointer lives inside the slab segment
+bool slab_owns(void* pointer);
