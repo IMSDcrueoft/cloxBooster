@@ -100,6 +100,21 @@ typedef enum {
 
 	OP_NOT_LOCAL,
 	OP_NEGATE_LOCAL,
+
+	//branch super command (fused compare + jump if false)
+	//format: [op:8][local:8][const:16][offset:16]
+	OP_JIF_LESS_LC,			// local <  const else jump
+	OP_JIF_LESS_EQUAL_LC,	// local <= const else jump
+	OP_JIF_GREATER_LC,		// local >  const else jump
+	OP_JIF_GREATER_EQUAL_LC,// local >= const else jump
+	OP_JIF_EQUAL_LC,		// local == const else jump
+	OP_JIF_NOT_EQUAL_LC,	// local != const else jump
+	//LL forms: both operands are local slots; > / >= reuse the LESS forms via slot swap
+	//format: [op:8][localA:8][localB:8][offset:16]
+	OP_JIF_LESS_LL,			// a <  b else jump
+	OP_JIF_LESS_EQUAL_LL,	// a <= b else jump
+	OP_JIF_EQUAL_LL,		// a == b else jump
+	OP_JIF_NOT_EQUAL_LL,	// a != b else jump
 } OpCode;
 
 typedef struct {

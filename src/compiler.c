@@ -200,6 +200,82 @@ static int32_t emitBranchJump(uint8_t instruction, int32_t condStart) {
 			}
 			return -1;//never taken
 		}
+
+		//try to fuse [operand load][fused compare] + jump into one OP_JIF_*_LL/LC:
+		//pattern A: GET_LOCAL a + <CMP>_LOCAL b (4 bytes; both slots can swap, so > / >= reuse the LESS forms)
+		//pattern B: GET_LOCAL a + <CMP>_CONST c (5 bytes, local on the left)
+		//pattern C: OP_CONSTANT c + <CMP>_LOCAL a (5 bytes, const on the left, flip the direction)
+		//anything else falls through to the plain jump
+		if (regionSize == 4 && cond == OP_GET_LOCAL) {
+			uint8_t cmpOp = chunk->code[condStart + 2];
+			uint8_t fused = UINT8_MAX;
+			bool swap = false;
+			uint32_t indexA = chunk->code[condStart + 1];
+			uint32_t indexB = chunk->code[condStart + 3];
+
+			switch (cmpOp) {
+			case OP_LESS_LOCAL:				fused = OP_JIF_LESS_LL; break;
+			case OP_LESS_EQUAL_LOCAL:		fused = OP_JIF_LESS_EQUAL_LL; break;
+			case OP_GREATER_LOCAL:			fused = OP_JIF_LESS_LL; swap = true; break;
+			case OP_GREATER_EQUAL_LOCAL:	fused = OP_JIF_LESS_EQUAL_LL; swap = true; break;
+			case OP_EQUAL_LOCAL:			fused = OP_JIF_EQUAL_LL; break;
+			case OP_NOT_EQUAL_LOCAL:		fused = OP_JIF_NOT_EQUAL_LL; break;
+			}
+
+			if (fused != UINT8_MAX) {
+				chunk_fallback(chunk, regionSize);//rollback the condition bytes
+
+				//[op:8][localA:8][localB:8][offset:16 placeholder]
+				emitBytes(5, fused,
+					(uint8_t)(swap ? indexB : indexA), (uint8_t)(swap ? indexA : indexB), 0xff, 0xff);
+				clearOpStack();
+				return currentChunk()->count - 2;
+			}
+		}
+
+		if (regionSize == 5) {
+			uint8_t fused = UINT8_MAX;
+			uint32_t localIndex = 0;
+			uint32_t constIndex = 0;
+
+			if (cond == OP_GET_LOCAL) {
+				localIndex = chunk->code[condStart + 1];
+				constIndex = ((uint32_t)chunk->code[condStart + 3]) | ((uint32_t)chunk->code[condStart + 4] << 8);
+
+				switch (chunk->code[condStart + 2]) {
+				case OP_LESS_CONST:				fused = OP_JIF_LESS_LC; break;
+				case OP_LESS_EQUAL_CONST:		fused = OP_JIF_LESS_EQUAL_LC; break;
+				case OP_GREATER_CONST:			fused = OP_JIF_GREATER_LC; break;
+				case OP_GREATER_EQUAL_CONST:	fused = OP_JIF_GREATER_EQUAL_LC; break;
+				case OP_EQUAL_CONST:			fused = OP_JIF_EQUAL_LC; break;
+				case OP_NOT_EQUAL_CONST:		fused = OP_JIF_NOT_EQUAL_LC; break;
+				}
+			}
+			else if (cond == OP_CONSTANT) {
+				constIndex = ((uint32_t)chunk->code[condStart + 1]) | ((uint32_t)chunk->code[condStart + 2] << 8);
+				localIndex = chunk->code[condStart + 4];
+
+				//const was on the left: flip the direction (== / != need no flip)
+				switch (chunk->code[condStart + 3]) {
+				case OP_LESS_LOCAL:				fused = OP_JIF_GREATER_LC; break;
+				case OP_LESS_EQUAL_LOCAL:		fused = OP_JIF_GREATER_EQUAL_LC; break;
+				case OP_GREATER_LOCAL:			fused = OP_JIF_LESS_LC; break;
+				case OP_GREATER_EQUAL_LOCAL:	fused = OP_JIF_LESS_EQUAL_LC; break;
+				case OP_EQUAL_LOCAL:			fused = OP_JIF_EQUAL_LC; break;
+				case OP_NOT_EQUAL_LOCAL:		fused = OP_JIF_NOT_EQUAL_LC; break;
+				}
+			}
+
+			if (fused != UINT8_MAX) {
+				chunk_fallback(chunk, regionSize);//rollback the condition bytes
+
+				//[op:8][local:8][const:16][offset:16 placeholder]
+				emitBytes(6, fused, (uint8_t)localIndex,
+					(uint8_t)constIndex, (uint8_t)(constIndex >> 8), 0xff, 0xff);
+				clearOpStack();
+				return currentChunk()->count - 2;
+			}
+		}
 	}
 #else
 	(void)condStart;
@@ -789,11 +865,12 @@ static void forStatement() {
 
 	int32_t exitJump = -1;
 	if (!match(TOKEN_SEMICOLON)) {//for(; here ;)
+		int32_t condStart = currentChunk()->count;
 		expression();
 		consume(TOKEN_SEMICOLON, "Expect ';' after loop condition.");
 
 		// Jump out of the loop if the condition is false.
-		exitJump = emitJump(OP_JUMP_IF_FALSE_POP);
+		exitJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 	}
 
 	//the code is: init,condition,increase,body,loop_to_increase

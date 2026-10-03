@@ -71,6 +71,15 @@
     <ClCompile Include="src\hash.c">
       <Filter>cloxBooster\source</Filter>
     </ClCompile>
+    <ClCompile Include="third-party\slabAllocator\includes\bits.c">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="third-party\slabAllocator\includes\palloc_os.c">
+      <Filter>source</Filter>
+    </ClCompile>
+    <ClCompile Include="third-party\slabAllocator\includes\arena_slab.c">
+      <Filter>source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\chunk.h">
@@ -130,5 +139,8 @@
     <ClInclude Include="src\file.h">
       <Filter>cloxBooster\header</Filter>
     </ClInclude>
+    <ClInclude Include="third-party\slabAllocator\includes\bits.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\palloc_os.h" />
+    <ClInclude Include="third-party\slabAllocator\includes\arena_slab.h" />
   </ItemGroup>
 </Project>

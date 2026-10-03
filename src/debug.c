@@ -72,6 +72,30 @@ static uint32_t invokeInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
 }
 
 COLD_FUNCTION
+static uint32_t jifLCInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
+	//[op:8][local:8][const:16][offset:16]
+	uint32_t slot = chunk->code[offset + 1];
+	uint32_t constant = ((uint32_t)chunk->code[offset + 2]) | ((uint32_t)chunk->code[offset + 3] << 8);
+	uint16_t jump = ((uint16_t)chunk->code[offset + 4]) | ((uint16_t)chunk->code[offset + 5] << 8);
+
+	printf("%-16s %4d '", name, slot);
+	printValue(vm.constants.values[constant]);
+	printf("' %4d -> %d\n", offset, offset + 6 + jump);
+	return offset + 6;
+}
+
+COLD_FUNCTION
+static uint32_t jifLLInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
+	//[op:8][localA:8][localB:8][offset:16]
+	uint32_t slotA = chunk->code[offset + 1];
+	uint32_t slotB = chunk->code[offset + 2];
+	uint16_t jump = ((uint16_t)chunk->code[offset + 3]) | ((uint16_t)chunk->code[offset + 4] << 8);
+
+	printf("%-16s %4d %4d %4d -> %d\n", name, slotA, slotB, offset, offset + 5 + jump);
+	return offset + 5;
+}
+
+COLD_FUNCTION
 uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	printf("%04d ", offset);
 
@@ -265,6 +289,30 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return byteInstruction("OP_LESS_LOCAL", chunk, offset);
 	case OP_LESS_EQUAL_LOCAL:
 		return byteInstruction("OP_LESS_EQUAL_LOCAL", chunk, offset);
+
+	case OP_JIF_LESS_LC:
+		return jifLCInstruction("OP_JIF_LESS_LC", chunk, offset);
+	case OP_JIF_LESS_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_LESS_EQUAL_LC", chunk, offset);
+	case OP_JIF_GREATER_LC:
+		return jifLCInstruction("OP_JIF_GREATER_LC", chunk, offset);
+	case OP_JIF_GREATER_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_GREATER_EQUAL_LC", chunk, offset);
+	case OP_JIF_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_EQUAL_LC", chunk, offset);
+	case OP_JIF_NOT_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_NOT_EQUAL_LC", chunk, offset);
+
+#if ENABLE_JIF_LL
+	case OP_JIF_LESS_LL:
+		return jifLLInstruction("OP_JIF_LESS_LL", chunk, offset);
+	case OP_JIF_LESS_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_LESS_EQUAL_LL", chunk, offset);
+	case OP_JIF_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_EQUAL_LL", chunk, offset);
+	case OP_JIF_NOT_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_NOT_EQUAL_LL", chunk, offset);
+#endif
 
 	default:
 		printf("Unknown opcode %d offset = %d\n", instruction, offset);
