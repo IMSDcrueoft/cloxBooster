@@ -50,6 +50,7 @@ typedef enum {
 
 	OP_GET_PROPERTY,	// modify property
 	OP_SET_PROPERTY,
+	OP_SET_PROPERTY_POP,// set property and pop value
 	OP_GET_INDEX,
 	OP_GET_SUPER,		//get super
 	OP_GET_GLOBAL,

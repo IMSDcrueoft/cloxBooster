@@ -489,6 +489,7 @@ static InterpretResult run()
 
 		[OP_GET_PROPERTY] = && label_op_get_property,
 		[OP_SET_PROPERTY] = && label_op_set_property,
+		[OP_SET_PROPERTY_POP] = && label_op_set_property_pop,
 		[OP_GET_INDEX] = && label_op_get_index,
 		[OP_GET_SUPER] = && label_op_get_super,
 		[OP_GET_GLOBAL] = && label_op_get_global,
@@ -705,6 +706,26 @@ static InterpretResult run()
 			}
 			Value value = stack_pop();
 			stack_replace(value);
+			NEXT_INSTRUCTION;
+		}
+		case OP_SET_PROPERTY_POP: {
+		label_op_set_property_pop:
+			if (!IS_INSTANCE(vm.stackTop[-2])) {
+				runtimeError("Only instances have fields.");
+				return INTERPRET_RUNTIME_ERROR;
+			}
+
+			ObjInstance* instance = AS_INSTANCE(vm.stackTop[-2]);
+			Value constant = READ_CONSTANT(READ_SHORT());
+			ObjString* name = AS_STRING(constant);
+			if (NOT_NIL(vm.stackTop[-1])) {
+				tableSet(&instance->fields, name, vm.stackTop[-1]);
+			}
+			else {
+				tableDelete(&instance->fields, name);
+			}
+			//pop value and instance
+			vm.stackTop -= 2;
 			NEXT_INSTRUCTION;
 		}
 		case OP_GET_INDEX: {

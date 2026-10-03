@@ -1145,16 +1145,20 @@ static void dot(bool canAssign) {
 	if (canAssign && match(TOKEN_EQUAL)) {
 		expression();
 		emitConstantCommond(OP_SET_PROPERTY, name);
+		//clear expression ops,keep SET_PROPERTY for POP merge
+		clearOpStack();
+		emitOpStack(OP_SET_PROPERTY, false);
 	}
 	else if (match(TOKEN_LEFT_PAREN)) {
 		uint8_t argCount = argumentList();
 		emitConstantCommond(OP_INVOKE, name);
 		emitByte(argCount);
+		clearOpStack();
 	}
 	else {
 		emitConstantCommond(OP_GET_PROPERTY, name);
+		clearOpStack();
 	}
-	clearOpStack();
 }
 
 
@@ -1228,7 +1232,13 @@ static void mergeSubscript(bool isAssignment) {
 	}
 	else if (IS_STRING(val)) {
 		emitConstantCommond(isAssignment ? OP_SET_PROPERTY : OP_GET_PROPERTY, index);
-		clearOpStack();
+		if (isAssignment) {
+			//keep SET_PROPERTY on opStack for POP merge
+			emitOpStack(OP_SET_PROPERTY, false);
+		}
+		else {
+			clearOpStack();
+		}
 	}
 	else {
 		error("Can only subscript with string or number.\n");
@@ -1935,6 +1945,13 @@ static void instructionOptimize() {
 				CHUNK_PEEK(1) = OP_SET_LOCAL_POP; //convert command
 				clearOpStack();
 			}
+		}
+		else if (prevRight == OP_SET_PROPERTY) {
+			//set property + pop -> set property and pop
+			//set property is [op][name u16] = 3 bytes, op sits at count-3
+			chunk_fallback(chunk, 1);//pop
+			CHUNK_PEEK(2) = OP_SET_PROPERTY_POP; //convert command
+			clearOpStack();
 		}
 		break;
 	}

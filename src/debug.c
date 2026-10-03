@@ -178,6 +178,8 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return constantInstruction("OP_GET_PROPERTY", chunk, offset);
 	case OP_SET_PROPERTY:
 		return constantInstruction("OP_SET_PROPERTY", chunk, offset);
+	case OP_SET_PROPERTY_POP:
+		return constantInstruction("OP_SET_PROPERTY_POP", chunk, offset);
 	case OP_GET_INDEX:
 		return constantInstruction("OP_GET_INDEX", chunk, offset);
 
@@ -323,6 +325,7 @@ void disassembleOpStack(OPStack* opStack) {
 		case OP_RETURN:           printf("OP_RETURN\n"); break;
 		case OP_GET_PROPERTY:     printf("OP_GET_PROPERTY\n"); break;
 		case OP_SET_PROPERTY:     printf("OP_SET_PROPERTY\n"); break;
+		case OP_SET_PROPERTY_POP: printf("OP_SET_PROPERTY_POP\n"); break;
 		case OP_GET_INDEX:        printf("OP_GET_INDEX\n"); break;
 		case OP_GET_SUPER:        printf("OP_GET_SUPER\n"); break;
 		case OP_GET_GLOBAL:       printf("OP_GET_GLOBAL\n"); break;
