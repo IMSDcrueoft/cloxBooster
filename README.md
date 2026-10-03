@@ -38,7 +38,8 @@ Lox is a programming language designed for learning purposes. It is conceived as
 #### Performance test
 
 All values are in **seconds** (reported by the `clock()` global).
-v1.3.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 slab-allocation results are the median of repeated runs.
+v1.4.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 22
+v1.3.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20
 v1.0.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 (cloxBooster & clox).
 
 |program|cloxBooster - [1.4.0]|cloxBooster - [1.3.0]|cloxBooster - [1.0.0]|clox|
