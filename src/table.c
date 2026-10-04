@@ -21,7 +21,7 @@ void table_init(Table* table)
 
 void table_free(Table* table)
 {
-	FREE_ARRAY(Entry, table->entries, table->capacity);
+	FREE_ARRAY_SLAB(Entry, table->entries, table->capacity);
 	table_init(table);
 }
 
@@ -65,7 +65,8 @@ static Entry* findEntry(Entry* entries, uint32_t capacity, ObjString* key, bool 
 
 static void adjustCapacity(Table* table, uint32_t capacity) {
 	//we need re input, so don't reallocate
-	Entry* entries = ALLOCATE(Entry, capacity);
+	//slab-routed: capacity 8/16 (<= 256B) come from the arena slab
+	Entry* entries = ALLOCATE_SLAB(Entry, capacity);
 
 	for (uint32_t i = 0; i < capacity; ++i) {
 		entries[i].key = NULL;
@@ -85,7 +86,7 @@ static void adjustCapacity(Table* table, uint32_t capacity) {
 		table->count++;
 	}
 
-	FREE_ARRAY(Entry, table->entries, table->capacity);
+	FREE_ARRAY_SLAB(Entry, table->entries, table->capacity);
 
 	table->entries = entries;
 	table->capacity = capacity;

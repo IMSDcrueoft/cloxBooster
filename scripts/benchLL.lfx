@@ -1,0 +1,19 @@
+// LL (local < local) is NOT fused in phase 1 -> old codegen path.
+// same loop shape as loop1e8 segment 2, used to isolate whether the
+// slowdown comes from the fused JIF op itself or from something global.
+var start = (clock() * 1000);
+for(var i = 0, j = 1e8; i < j;){
+    i = i+1;
+}
+print (clock() * 1000) - start;
+
+// same, but while-based
+start = (clock() * 1000);
+{
+    var i = 0;
+    var j = 1e8;
+    while (i < j) {
+        i = i+1;
+    }
+}
+print (clock() * 1000) - start;

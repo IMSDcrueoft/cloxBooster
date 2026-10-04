@@ -159,6 +159,130 @@ static int32_t emitJump(uint8_t instruction) {
 	return currentChunk()->count - 2;
 }
 
+//branch-style conditional jump (if/while/do-while only)
+//whole condition is exactly one compile-time constant load:
+//  falsy (OP_FALSE/OP_NIL/nil-or-false constant) -> always taken : rollback cond, emit OP_JUMP (no runtime compare)
+//  truthy (OP_TRUE/any other constant)           -> never taken : rollback cond, no jump, return -1 (no backpatch)
+//truthiness mirrors vm's isTruthy: only nil and false are falsy
+//returns patch offset like emitJump, or -1 when nothing to patch
+//format note: our constant loads are OP_CONSTANT + 16bit index (3 bytes total);
+//the parent project's OP_CONST_NUMBER (its own per-function number pool) does not exist here,
+//number constants ride the same single constant pool like every other constant
+static int32_t emitBranchJump(uint8_t instruction, int32_t condStart) {
+#if COMPILATION_TIME_OPTIMIZATION
+	if (instruction == OP_JUMP_IF_FALSE_POP) {
+		Chunk* chunk = currentChunk();
+		uint32_t regionSize = chunk->count - (uint32_t)condStart;
+		uint8_t cond = chunk->code[condStart];
+
+		bool known = false;
+		bool truthy = false;
+
+		//1 byte literal
+		if (regionSize == 1 && (cond == OP_TRUE || cond == OP_FALSE || cond == OP_NIL)) {
+			known = true;
+			truthy = (cond == OP_TRUE);
+		}
+		//3 bytes constant load (opcode + 16bit index into vm.constants)
+		//constants are only ever strings/functions/numbers - nil/true/false ride
+		//their own 1-byte opcodes and never enter the pool - so always truthy
+		else if (regionSize == 3 && cond == OP_CONSTANT) {
+			known = true;
+			truthy = true;
+		}
+
+		if (known) {
+			chunk_fallback(chunk, regionSize);//rollback the condition bytes
+			clearOpStack();
+
+			if (!truthy) {
+				return emitJump(OP_JUMP);//always taken
+			}
+			return -1;//never taken
+		}
+
+		//try to fuse [operand load][fused compare] + jump into one OP_JIF_*_LL/LC:
+		//pattern A: GET_LOCAL a + <CMP>_LOCAL b (4 bytes; both slots can swap, so > / >= reuse the LESS forms)
+		//pattern B: GET_LOCAL a + <CMP>_CONST c (5 bytes, local on the left)
+		//pattern C: OP_CONSTANT c + <CMP>_LOCAL a (5 bytes, const on the left, flip the direction)
+		//anything else falls through to the plain jump
+		if (regionSize == 4 && cond == OP_GET_LOCAL) {
+			uint8_t cmpOp = chunk->code[condStart + 2];
+			uint8_t fused = UINT8_MAX;
+			bool swap = false;
+			uint32_t indexA = chunk->code[condStart + 1];
+			uint32_t indexB = chunk->code[condStart + 3];
+
+			switch (cmpOp) {
+			case OP_LESS_LOCAL:				fused = OP_JIF_LESS_LL; break;
+			case OP_LESS_EQUAL_LOCAL:		fused = OP_JIF_LESS_EQUAL_LL; break;
+			case OP_GREATER_LOCAL:			fused = OP_JIF_LESS_LL; swap = true; break;
+			case OP_GREATER_EQUAL_LOCAL:	fused = OP_JIF_LESS_EQUAL_LL; swap = true; break;
+			case OP_EQUAL_LOCAL:			fused = OP_JIF_EQUAL_LL; break;
+			case OP_NOT_EQUAL_LOCAL:		fused = OP_JIF_NOT_EQUAL_LL; break;
+			}
+
+			if (fused != UINT8_MAX) {
+				chunk_fallback(chunk, regionSize);//rollback the condition bytes
+
+				//[op:8][localA:8][localB:8][offset:16 placeholder]
+				emitBytes(5, fused,
+					(uint8_t)(swap ? indexB : indexA), (uint8_t)(swap ? indexA : indexB), 0xff, 0xff);
+				clearOpStack();
+				return currentChunk()->count - 2;
+			}
+		}
+
+		if (regionSize == 5) {
+			uint8_t fused = UINT8_MAX;
+			uint32_t localIndex = 0;
+			uint32_t constIndex = 0;
+
+			if (cond == OP_GET_LOCAL) {
+				localIndex = chunk->code[condStart + 1];
+				constIndex = ((uint32_t)chunk->code[condStart + 3]) | ((uint32_t)chunk->code[condStart + 4] << 8);
+
+				switch (chunk->code[condStart + 2]) {
+				case OP_LESS_CONST:				fused = OP_JIF_LESS_LC; break;
+				case OP_LESS_EQUAL_CONST:		fused = OP_JIF_LESS_EQUAL_LC; break;
+				case OP_GREATER_CONST:			fused = OP_JIF_GREATER_LC; break;
+				case OP_GREATER_EQUAL_CONST:	fused = OP_JIF_GREATER_EQUAL_LC; break;
+				case OP_EQUAL_CONST:			fused = OP_JIF_EQUAL_LC; break;
+				case OP_NOT_EQUAL_CONST:		fused = OP_JIF_NOT_EQUAL_LC; break;
+				}
+			}
+			else if (cond == OP_CONSTANT) {
+				constIndex = ((uint32_t)chunk->code[condStart + 1]) | ((uint32_t)chunk->code[condStart + 2] << 8);
+				localIndex = chunk->code[condStart + 4];
+
+				//const was on the left: flip the direction (== / != need no flip)
+				switch (chunk->code[condStart + 3]) {
+				case OP_LESS_LOCAL:				fused = OP_JIF_GREATER_LC; break;
+				case OP_LESS_EQUAL_LOCAL:		fused = OP_JIF_GREATER_EQUAL_LC; break;
+				case OP_GREATER_LOCAL:			fused = OP_JIF_LESS_LC; break;
+				case OP_GREATER_EQUAL_LOCAL:	fused = OP_JIF_LESS_EQUAL_LC; break;
+				case OP_EQUAL_LOCAL:			fused = OP_JIF_EQUAL_LC; break;
+				case OP_NOT_EQUAL_LOCAL:		fused = OP_JIF_NOT_EQUAL_LC; break;
+				}
+			}
+
+			if (fused != UINT8_MAX) {
+				chunk_fallback(chunk, regionSize);//rollback the condition bytes
+
+				//[op:8][local:8][const:16][offset:16 placeholder]
+				emitBytes(6, fused, (uint8_t)localIndex,
+					(uint8_t)constIndex, (uint8_t)(constIndex >> 8), 0xff, 0xff);
+				clearOpStack();
+				return currentChunk()->count - 2;
+			}
+		}
+	}
+#else
+	(void)condStart;
+#endif
+	return emitJump(instruction);
+}
+
 // generate loop
 static void emitLoop(int32_t loopStart) {
 	emitByte(OP_LOOP);
@@ -741,11 +865,12 @@ static void forStatement() {
 
 	int32_t exitJump = -1;
 	if (!match(TOKEN_SEMICOLON)) {//for(; here ;)
+		int32_t condStart = currentChunk()->count;
 		expression();
 		consume(TOKEN_SEMICOLON, "Expect ';' after loop condition.");
 
 		// Jump out of the loop if the condition is false.
-		exitJump = emitJump(OP_JUMP_IF_FALSE_POP);
+		exitJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 	}
 
 	//the code is: init,condition,increase,body,loop_to_increase
@@ -792,14 +917,15 @@ static void forStatement() {
 
 static void ifStatement() {
 	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+	int32_t condStart = currentChunk()->count;
 	expression();
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 
-	int32_t thenJump = emitJump(OP_JUMP_IF_FALSE_POP);
+	int32_t thenJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 	statement();
 
 	int32_t elseJump = emitJump(OP_JUMP);
-	patchJump(thenJump);
+	if (thenJump != -1) patchJump(thenJump);
 
 	if (match(TOKEN_ELSE)) statement();
 	patchJump(elseJump);
@@ -836,10 +962,11 @@ static void whileStatement() {
 	int32_t loopStart = currentChunk()->count;
 
 	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+	int32_t condStart = currentChunk()->count;
 	expression();
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 
-	int32_t exitJump = emitJump(OP_JUMP_IF_FALSE_POP);
+	int32_t exitJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 
 	//record the loop
 	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount };
@@ -851,7 +978,9 @@ static void whileStatement() {
 
 	emitLoop(loopStart);
 
-	patchJump(exitJump);
+	if (exitJump != -1) {
+		patchJump(exitJump);
+	}
 
 	while (loop.breakJumpCount > 0) {
 		patchJump(loop.breakJumps[--loop.breakJumpCount]);
@@ -873,13 +1002,16 @@ static void doWhileStatement() {
 
 	consume(TOKEN_WHILE, "Expect 'while' after 'do' to form a valid 'do-while'.");
 	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+	int32_t condStart = currentChunk()->count;
 	expression();
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 	consume(TOKEN_SEMICOLON, "Expect ';' after 'do-while' loop.");
 
-	int32_t exitJump = emitJump(OP_JUMP_IF_FALSE_POP);
+	int32_t exitJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 	emitLoop(loopStart);
-	patchJump(exitJump);
+	if (exitJump != -1) {
+		patchJump(exitJump);
+	}
 
 	while (loop.breakJumpCount > 0) {
 		patchJump(loop.breakJumps[--loop.breakJumpCount]);
@@ -1090,16 +1222,20 @@ static void dot(bool canAssign) {
 	if (canAssign && match(TOKEN_EQUAL)) {
 		expression();
 		emitConstantCommond(OP_SET_PROPERTY, name);
+		//clear expression ops,keep SET_PROPERTY for POP merge
+		clearOpStack();
+		emitOpStack(OP_SET_PROPERTY, false);
 	}
 	else if (match(TOKEN_LEFT_PAREN)) {
 		uint8_t argCount = argumentList();
 		emitConstantCommond(OP_INVOKE, name);
 		emitByte(argCount);
+		clearOpStack();
 	}
 	else {
 		emitConstantCommond(OP_GET_PROPERTY, name);
+		clearOpStack();
 	}
-	clearOpStack();
 }
 
 
@@ -1173,7 +1309,13 @@ static void mergeSubscript(bool isAssignment) {
 	}
 	else if (IS_STRING(val)) {
 		emitConstantCommond(isAssignment ? OP_SET_PROPERTY : OP_GET_PROPERTY, index);
-		clearOpStack();
+		if (isAssignment) {
+			//keep SET_PROPERTY on opStack for POP merge
+			emitOpStack(OP_SET_PROPERTY, false);
+		}
+		else {
+			clearOpStack();
+		}
 	}
 	else {
 		error("Can only subscript with string or number.\n");
@@ -1498,6 +1640,9 @@ static void instructionOptimize() {
 	bool isLeftConstant = (prevLeft == OP_CONSTANT);
 	bool isRightConstant = (prevRight == OP_CONSTANT);
 	bool isBothConstant = (isLeftConstant && isRightConstant);
+	//literal opcodes (true/false/nil) are compile-time constants too
+	bool isLeftLiteral = (prevLeft == OP_TRUE) || (prevLeft == OP_FALSE) || (prevLeft == OP_NIL);
+	bool isRightLiteral = (prevRight == OP_TRUE) || (prevRight == OP_FALSE) || (prevRight == OP_NIL);
 	// local
 	bool isLeftLocal = (prevLeft == OP_GET_LOCAL);
 	bool isRightLocal = (prevRight == OP_GET_LOCAL);
@@ -1512,6 +1657,19 @@ static void instructionOptimize() {
 #define READ_16BITS_INDEX(offset)	\
 	(((uint32_t)chunk->code[chunk->count - (offset) - 1] << 8) +	\
 	 ((uint32_t)chunk->code[chunk->count - (offset) - 2]))
+
+//instruction size of a constant operand: our constant loads are OP_CONSTANT +
+//16bit index (3 bytes total, single constant pool); literal opcodes are 1 byte.
+//the parent project distinguishes OP_CONST_NUMBER (3) from OP_CONSTANT (4) for
+//its dual pools, that split does not exist here
+#define OPERAND_SIZE(op)	(((op) == OP_CONSTANT) ? 3 : 1)
+
+//resolve a compile-time constant operand (OP_CONSTANT/OP_TRUE/OP_FALSE/OP_NIL)
+//to its Value, offset counts from the last emitted byte
+#define READ_OPERAND(op, offset)	\
+	(((op) == OP_CONSTANT)	? READ_CONSTANT(READ_16BITS_INDEX(offset)) :	\
+	 ((op) == OP_TRUE)		? TRUE_VAL :	\
+	 ((op) == OP_FALSE)		? FALSE_VAL : NIL_VAL)
 
 #define BINARY_CALC(left,right,op)								\
     do {														\
@@ -1721,15 +1879,12 @@ static void instructionOptimize() {
 		break;
 	}
 	case OP_EQUAL: {
-		if (isBothConstant) {
-			uint32_t idx_left = READ_16BITS_INDEX(1 + 3);//op + const
-			uint32_t idx_right = READ_16BITS_INDEX(1); //op
-
-			Value left = READ_CONSTANT(idx_left);
-			Value right = READ_CONSTANT(idx_right);
+		if ((isLeftConstant || isLeftLiteral) && (isRightConstant || isRightLiteral)) {
+			Value left = READ_OPERAND(prevLeft, 1 + OPERAND_SIZE(prevRight));
+			Value right = READ_OPERAND(prevRight, 1);
 
 			bool val = valuesEqual(left, right);
-			chunk_fallback(chunk, 1 + 3 + 3);//op + const + const
+			chunk_fallback(chunk, 1 + OPERAND_SIZE(prevLeft) + OPERAND_SIZE(prevRight));//op + const/literal + const/literal
 			opStack_fallback(opStack, 3);
 			emitByte(val ? OP_TRUE : OP_FALSE);
 			emitOpStack(val ? OP_TRUE : OP_FALSE, false);
@@ -1747,15 +1902,12 @@ static void instructionOptimize() {
 		break;
 	}
 	case OP_NOT_EQUAL: {
-		if (isBothConstant) {
-			uint32_t idx_left = READ_16BITS_INDEX(1 + 3);//op + const
-			uint32_t idx_right = READ_16BITS_INDEX(1); //op
-
-			Value left = READ_CONSTANT(idx_left);
-			Value right = READ_CONSTANT(idx_right);
+		if ((isLeftConstant || isLeftLiteral) && (isRightConstant || isRightLiteral)) {
+			Value left = READ_OPERAND(prevLeft, 1 + OPERAND_SIZE(prevRight));
+			Value right = READ_OPERAND(prevRight, 1);
 
 			bool val = !valuesEqual(left, right);
-			chunk_fallback(chunk, 1 + 3 + 3);//op + const + const
+			chunk_fallback(chunk, 1 + OPERAND_SIZE(prevLeft) + OPERAND_SIZE(prevRight));//op + const/literal + const/literal
 			opStack_fallback(opStack, 3);
 			emitByte(val ? OP_TRUE : OP_FALSE);
 			emitOpStack(val ? OP_TRUE : OP_FALSE, false);
@@ -1871,6 +2023,13 @@ static void instructionOptimize() {
 				clearOpStack();
 			}
 		}
+		else if (prevRight == OP_SET_PROPERTY) {
+			//set property + pop -> set property and pop
+			//set property is [op][name u16] = 3 bytes, op sits at count-3
+			chunk_fallback(chunk, 1);//pop
+			CHUNK_PEEK(2) = OP_SET_PROPERTY_POP; //convert command
+			clearOpStack();
+		}
 		break;
 	}
 	case OP_SET_LOCAL: {
@@ -1886,6 +2045,8 @@ static void instructionOptimize() {
 #undef READ_CONSTANT
 #undef READ_BYTE_INDEX
 #undef READ_16BITS_INDEX
+#undef OPERAND_SIZE
+#undef READ_OPERAND
 #undef BINARY_CALC
 #undef BINARY_CMP
 }

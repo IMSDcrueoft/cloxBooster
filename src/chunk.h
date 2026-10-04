@@ -10,9 +10,9 @@
 #include "lineArray.h"
 
 typedef enum {
-	OP_CONSTANT,   // 1 + 3 byte
+	OP_CONSTANT,   // 1 + 2 byte
 
-	//load local
+	//load local 1 + 1 byte
 	OP_GET_LOCAL,
 	OP_SET_LOCAL,
 	OP_SET_LOCAL_POP,
@@ -50,6 +50,7 @@ typedef enum {
 
 	OP_GET_PROPERTY,	// modify property
 	OP_SET_PROPERTY,
+	OP_SET_PROPERTY_POP,// set property and pop value
 	OP_GET_INDEX,
 	OP_GET_SUPER,		//get super
 	OP_GET_GLOBAL,
@@ -99,6 +100,21 @@ typedef enum {
 
 	OP_NOT_LOCAL,
 	OP_NEGATE_LOCAL,
+
+	//branch super command (fused compare + jump if false)
+	//format: [op:8][local:8][const:16][offset:16]
+	OP_JIF_LESS_LC,			// local <  const else jump
+	OP_JIF_LESS_EQUAL_LC,	// local <= const else jump
+	OP_JIF_GREATER_LC,		// local >  const else jump
+	OP_JIF_GREATER_EQUAL_LC,// local >= const else jump
+	OP_JIF_EQUAL_LC,		// local == const else jump
+	OP_JIF_NOT_EQUAL_LC,	// local != const else jump
+	//LL forms: both operands are local slots; > / >= reuse the LESS forms via slot swap
+	//format: [op:8][localA:8][localB:8][offset:16]
+	OP_JIF_LESS_LL,			// a <  b else jump
+	OP_JIF_LESS_EQUAL_LL,	// a <= b else jump
+	OP_JIF_EQUAL_LL,		// a == b else jump
+	OP_JIF_NOT_EQUAL_LL,	// a != b else jump
 } OpCode;
 
 typedef struct {
@@ -122,10 +138,7 @@ void chunk_write(Chunk* chunk, uint8_t byte, uint32_t line);
 void chunk_fallback(Chunk* chunk, uint32_t byteCount);
 void chunk_free(Chunk* chunk);
 
-//chech opStack first,than use this to override old codes
-#define CHUNK_PEEK(chunk, offset) chunk->code[chunk->count - offset - 1]
-
-//free the error complied code (not used)
+//free the error compiled code (not used)
 void chunk_free_errorCode(Chunk* chunk, uint32_t beginError);
 
 void opStack_init(OPStack* stack);

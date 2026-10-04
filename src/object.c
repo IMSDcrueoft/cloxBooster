@@ -27,13 +27,13 @@ const C_STR objTypeInfo[] = {
 #define ALLOCATE_FLEX_OBJ(type,objectType,byteSize) \
     (type*)allocateObject(byteSize, objectType)
 
-//slab-served objects: fixed size, gc-able, allocated from per-type caches
+//slab-served objects: fixed size, gc-able, allocated from the arena slab
 #define ALLOCATE_OBJ_SLAB(type, objectType) \
     (type*)allocateObject_slab(sizeof(type), objectType)
 
 HOT_FUNCTION
 static Obj* allocateObject_slab(uint64_t size, ObjType type) {
-	Obj* object = (Obj*)slab_allocObject(type, size);
+	Obj* object = (Obj*)slab_allocObject(size);
 
 	//link the objects
 	OBJ_PTR_SET_NEXT(object, vm.objects);
@@ -132,7 +132,7 @@ ObjNative* newNative(NativeFn function) {
 
 ObjClass* newClass(ObjString* name)
 {
-	ObjClass* klass = ALLOCATE_OBJ(ObjClass, OBJ_CLASS);
+	ObjClass* klass = ALLOCATE_OBJ_SLAB(ObjClass, OBJ_CLASS);
 	klass->name = name;
 	klass->initializer = NIL_VAL;
 	klass->methods.isGlobal = false;

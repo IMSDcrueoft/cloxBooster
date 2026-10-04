@@ -10,7 +10,7 @@
 // speed up fixed-size object allocation.
 #include <stdlib.h>
 
-#include "slab.h"
+#include "arena_slab.h"
 
 #define mem_alloc malloc
 #define mem_realloc realloc
@@ -18,12 +18,20 @@
 #define mem_print_stats
 
 // ---- slab layer ------------------------------------------------------------
-// Fixed-size objects (see SLAB_OBJ_TYPES in object.h) are allocated from
-// per-type slab caches instead of the raw heap. The caches are created
-// lazily on first use and torn down by freeSlabCaches() at shutdown.
+// Fixed-size GC objects (upvalue/closure/bound method/instance) are allocated
+// from the bundled arena slab (<= 256B size classes carved from one reserved
+// segment). The segment is reserved once by slab_init() at vm startup and
+// released by slab_shutdown() at teardown.
 
-void* slab_allocObject(unsigned int objType, size_t size);
-void slab_freeObject(unsigned int objType, void* pointer);
+bool slab_init();
+void slab_trim();
+void slab_log_info();
+void slab_shutdown();
 
-//destroy every slab cache, units are already gone at this point
-void slab_freeCaches();
+void* slab_allocObject(size_t size);
+void slab_freeObject(size_t size, void* pointer);
+
+//raw primitives for the slab-routed array path (no gc bookkeeping here)
+#define SLAB_MAX_ALLOC ((size_t)SLOT_SIZE_MAX)
+//true when the pointer lives inside the slab segment
+bool slab_owns(void* pointer);

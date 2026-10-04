@@ -72,6 +72,30 @@ static uint32_t invokeInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
 }
 
 COLD_FUNCTION
+static uint32_t jifLCInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
+	//[op:8][local:8][const:16][offset:16]
+	uint32_t slot = chunk->code[offset + 1];
+	uint32_t constant = ((uint32_t)chunk->code[offset + 2]) | ((uint32_t)chunk->code[offset + 3] << 8);
+	uint16_t jump = ((uint16_t)chunk->code[offset + 4]) | ((uint16_t)chunk->code[offset + 5] << 8);
+
+	printf("%-16s %4d '", name, slot);
+	printValue(vm.constants.values[constant]);
+	printf("' %4d -> %d\n", offset, offset + 6 + jump);
+	return offset + 6;
+}
+
+COLD_FUNCTION
+static uint32_t jifLLInstruction(C_STR name, Chunk* chunk, uint32_t offset) {
+	//[op:8][localA:8][localB:8][offset:16]
+	uint32_t slotA = chunk->code[offset + 1];
+	uint32_t slotB = chunk->code[offset + 2];
+	uint16_t jump = ((uint16_t)chunk->code[offset + 3]) | ((uint16_t)chunk->code[offset + 4] << 8);
+
+	printf("%-16s %4d %4d %4d -> %d\n", name, slotA, slotB, offset, offset + 5 + jump);
+	return offset + 5;
+}
+
+COLD_FUNCTION
 uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	printf("%04d ", offset);
 
@@ -178,6 +202,8 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return constantInstruction("OP_GET_PROPERTY", chunk, offset);
 	case OP_SET_PROPERTY:
 		return constantInstruction("OP_SET_PROPERTY", chunk, offset);
+	case OP_SET_PROPERTY_POP:
+		return constantInstruction("OP_SET_PROPERTY_POP", chunk, offset);
 	case OP_GET_INDEX:
 		return constantInstruction("OP_GET_INDEX", chunk, offset);
 
@@ -205,8 +231,9 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	case OP_JUMP:
 		return jumpInstruction("OP_JUMP", 1, chunk, offset);
 	case OP_JUMP_IF_FALSE:
-	case OP_JUMP_IF_FALSE_POP:
 		return jumpInstruction("OP_JUMP_IF_FALSE", 1, chunk, offset);
+	case OP_JUMP_IF_FALSE_POP:
+		return jumpInstruction("OP_JUMP_IF_FALSE_POP", 1, chunk, offset);
 	case OP_JUMP_IF_TRUE:
 		return jumpInstruction("OP_JUMP_IF_TRUE", 1, chunk, offset);
 	case OP_LOOP:
@@ -217,9 +244,9 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	case OP_SUBTRACT_CONST:
 		return constantInstruction("OP_SUBTRACT_CONST", chunk, offset);
 	case OP_MULTIPLY_CONST:
-		return constantInstruction("OP_SUBTRACT_CONST", chunk, offset);
+		return constantInstruction("OP_MULTIPLY_CONST", chunk, offset);
 	case OP_DIVIDE_CONST:
-		return constantInstruction("OP_SUBTRACT_CONST", chunk, offset);
+		return constantInstruction("OP_DIVIDE_CONST", chunk, offset);
 	case OP_MODULUS_CONST:
 		return constantInstruction("OP_MODULUS_CONST", chunk, offset);
 	case OP_EQUAL_CONST:
@@ -263,6 +290,30 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	case OP_LESS_EQUAL_LOCAL:
 		return byteInstruction("OP_LESS_EQUAL_LOCAL", chunk, offset);
 
+	case OP_JIF_LESS_LC:
+		return jifLCInstruction("OP_JIF_LESS_LC", chunk, offset);
+	case OP_JIF_LESS_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_LESS_EQUAL_LC", chunk, offset);
+	case OP_JIF_GREATER_LC:
+		return jifLCInstruction("OP_JIF_GREATER_LC", chunk, offset);
+	case OP_JIF_GREATER_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_GREATER_EQUAL_LC", chunk, offset);
+	case OP_JIF_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_EQUAL_LC", chunk, offset);
+	case OP_JIF_NOT_EQUAL_LC:
+		return jifLCInstruction("OP_JIF_NOT_EQUAL_LC", chunk, offset);
+
+#if ENABLE_JIF_LL
+	case OP_JIF_LESS_LL:
+		return jifLLInstruction("OP_JIF_LESS_LL", chunk, offset);
+	case OP_JIF_LESS_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_LESS_EQUAL_LL", chunk, offset);
+	case OP_JIF_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_EQUAL_LL", chunk, offset);
+	case OP_JIF_NOT_EQUAL_LL:
+		return jifLLInstruction("OP_JIF_NOT_EQUAL_LL", chunk, offset);
+#endif
+
 	default:
 		printf("Unknown opcode %d offset = %d\n", instruction, offset);
 		return offset + 1;
@@ -291,6 +342,8 @@ void disassembleOpStack(OPStack* opStack) {
 		case OP_CONSTANT:         printf("OP_CONSTANT\n"); break;
 		case OP_GET_LOCAL:        printf("OP_GET_LOCAL\n"); break;
 		case OP_SET_LOCAL:        printf("OP_SET_LOCAL\n"); break;
+		case OP_SET_LOCAL_POP:    printf("OP_SET_LOCAL_POP\n"); break;
+		case OP_MOVE_LOCAL:       printf("OP_MOVE_LOCAL\n"); break;
 		case OP_ADD:              printf("OP_ADD\n"); break;
 		case OP_SUBTRACT:         printf("OP_SUBTRACT\n"); break;
 		case OP_MULTIPLY:         printf("OP_MULTIPLY\n"); break;
@@ -307,7 +360,61 @@ void disassembleOpStack(OPStack* opStack) {
 		case OP_NOT_EQUAL:        printf("OP_NOT_EQUAL\n"); break;
 		case OP_LESS_EQUAL:       printf("OP_LESS_EQUAL\n"); break;
 		case OP_GREATER_EQUAL:    printf("OP_GREATER_EQUAL\n"); break;
+		case OP_JUMP:             printf("OP_JUMP\n"); break;
+		case OP_LOOP:             printf("OP_LOOP\n"); break;
+		case OP_JUMP_IF_FALSE:    printf("OP_JUMP_IF_FALSE\n"); break;
+		case OP_JUMP_IF_FALSE_POP: printf("OP_JUMP_IF_FALSE_POP\n"); break;
+		case OP_JUMP_IF_TRUE:     printf("OP_JUMP_IF_TRUE\n"); break;
 		case OP_POP:			  printf("OP_POP\n"); break;
+		case OP_POP_N:            printf("OP_POP_N\n"); break;
+		case OP_CALL:             printf("OP_CALL\n"); break;
+		case OP_INVOKE:           printf("OP_INVOKE\n"); break;
+		case OP_SUPER_INVOKE:     printf("OP_SUPER_INVOKE\n"); break;
+		case OP_RETURN:           printf("OP_RETURN\n"); break;
+		case OP_GET_PROPERTY:     printf("OP_GET_PROPERTY\n"); break;
+		case OP_SET_PROPERTY:     printf("OP_SET_PROPERTY\n"); break;
+		case OP_SET_PROPERTY_POP: printf("OP_SET_PROPERTY_POP\n"); break;
+		case OP_GET_INDEX:        printf("OP_GET_INDEX\n"); break;
+		case OP_GET_SUPER:        printf("OP_GET_SUPER\n"); break;
+		case OP_GET_GLOBAL:       printf("OP_GET_GLOBAL\n"); break;
+		case OP_SET_GLOBAL:       printf("OP_SET_GLOBAL\n"); break;
+		case OP_DEFINE_GLOBAL:    printf("OP_DEFINE_GLOBAL\n"); break;
+		case OP_SET_SUBSCRIPT:    printf("OP_SET_SUBSCRIPT\n"); break;
+		case OP_GET_SUBSCRIPT:    printf("OP_GET_SUBSCRIPT\n"); break;
+		case OP_CLOSURE:          printf("OP_CLOSURE\n"); break;
+		case OP_GET_UPVALUE:      printf("OP_GET_UPVALUE\n"); break;
+		case OP_SET_UPVALUE:      printf("OP_SET_UPVALUE\n"); break;
+		case OP_CLOSE_UPVALUE:    printf("OP_CLOSE_UPVALUE\n"); break;
+		case OP_NEW_OBJECT:       printf("OP_NEW_OBJECT\n"); break;
+		case OP_NEW_PROPERTY:     printf("OP_NEW_PROPERTY\n"); break;
+		case OP_CLASS:            printf("OP_CLASS\n"); break;
+		case OP_INHERIT:          printf("OP_INHERIT\n"); break;
+		case OP_METHOD:           printf("OP_METHOD\n"); break;
+		case OP_PRINT:            printf("OP_PRINT\n"); break;
+		case OP_ADD_CONST:        printf("OP_ADD_CONST\n"); break;
+		case OP_SUBTRACT_CONST:   printf("OP_SUBTRACT_CONST\n"); break;
+		case OP_MULTIPLY_CONST:   printf("OP_MULTIPLY_CONST\n"); break;
+		case OP_DIVIDE_CONST:     printf("OP_DIVIDE_CONST\n"); break;
+		case OP_MODULUS_CONST:    printf("OP_MODULUS_CONST\n"); break;
+		case OP_EQUAL_CONST:      printf("OP_EQUAL_CONST\n"); break;
+		case OP_GREATER_CONST:    printf("OP_GREATER_CONST\n"); break;
+		case OP_LESS_CONST:       printf("OP_LESS_CONST\n"); break;
+		case OP_NOT_EQUAL_CONST:  printf("OP_NOT_EQUAL_CONST\n"); break;
+		case OP_LESS_EQUAL_CONST: printf("OP_LESS_EQUAL_CONST\n"); break;
+		case OP_GREATER_EQUAL_CONST: printf("OP_GREATER_EQUAL_CONST\n"); break;
+		case OP_ADD_LOCAL:        printf("OP_ADD_LOCAL\n"); break;
+		case OP_SUBTRACT_LOCAL:   printf("OP_SUBTRACT_LOCAL\n"); break;
+		case OP_MULTIPLY_LOCAL:   printf("OP_MULTIPLY_LOCAL\n"); break;
+		case OP_DIVIDE_LOCAL:     printf("OP_DIVIDE_LOCAL\n"); break;
+		case OP_MODULUS_LOCAL:    printf("OP_MODULUS_LOCAL\n"); break;
+		case OP_EQUAL_LOCAL:      printf("OP_EQUAL_LOCAL\n"); break;
+		case OP_GREATER_LOCAL:    printf("OP_GREATER_LOCAL\n"); break;
+		case OP_LESS_LOCAL:       printf("OP_LESS_LOCAL\n"); break;
+		case OP_NOT_EQUAL_LOCAL:  printf("OP_NOT_EQUAL_LOCAL\n"); break;
+		case OP_LESS_EQUAL_LOCAL: printf("OP_LESS_EQUAL_LOCAL\n"); break;
+		case OP_GREATER_EQUAL_LOCAL: printf("OP_GREATER_EQUAL_LOCAL\n"); break;
+		case OP_NOT_LOCAL:        printf("OP_NOT_LOCAL\n"); break;
+		case OP_NEGATE_LOCAL:     printf("OP_NEGATE_LOCAL\n"); break;
 		default:
 			fprintf(stderr, "Unexpected(%u)\n", code);
 			break;

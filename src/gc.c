@@ -195,6 +195,7 @@ void garbageCollect()
 	traceReferences();
 	//tableRemoveWhite(&vm.strings);
 	sweep();
+	slab_trim();
 
 	//reset the limit
 	vm.nextGC = max(vm.bytesAllocated * GC_HEAP_GROW_FACTOR, vm.beginGC);

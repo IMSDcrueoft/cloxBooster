@@ -12,6 +12,20 @@
 
 void* reallocate(void* pointer, uint64_t oldSize, uint64_t newSize);
 
+//slab-routed variant dedicated to the table entries arrays: allocations
+//<= 256B come from the arena slab, larger ones (and frees of heap blocks)
+//fall back to the standard allocator; free/grow is paired by ownership check
+void* reallocate_slab(void* pointer, uint64_t oldSize, uint64_t newSize);
+
+#define GROW_ARRAY_SLAB(type, pointer, oldCount, newCount) \
+	((type*)reallocate_slab(pointer, sizeof(type) * (oldCount), sizeof(type) * (newCount)))
+
+#define FREE_ARRAY_SLAB(type, pointer, oldCount) \
+	reallocate_slab(pointer, sizeof(type) * (oldCount), 0)
+
+#define ALLOCATE_SLAB(type, count) \
+	(type*)reallocate_slab(NULL, 0, sizeof(type) * (count))
+
 #define GROW_ARRAY(type, pointer, oldCount, newCount) \
 	((type*)reallocate(pointer, sizeof(type) * (oldCount), sizeof(type) * (newCount)))
 
