@@ -10,9 +10,9 @@
 #include "lineArray.h"
 
 typedef enum {
-	OP_CONSTANT,   // 1 + 3 byte
+	OP_CONSTANT,   // 1 + 2 byte
 
-	//load local
+	//load local 1 + 1 byte
 	OP_GET_LOCAL,
 	OP_SET_LOCAL,
 	OP_SET_LOCAL_POP,
