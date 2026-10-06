@@ -2,8 +2,8 @@
  * MIT License
  * Copyright (c) 2026 IMSDcrueoft (https://github.com/IMSDcrueoft)
  * See LICENSE file in the root directory for full license text.
- * 
- * 
+ *
+ *
  * slab — small-object slab allocator core (≤256B only)
  */
 #include "arena_slab.h"
@@ -14,60 +14,51 @@
 #include <string.h>
 #include <assert.h>
 
- /* ---- Portable static assertions (works on MSVC / GCC / Clang)---- */
-#define slabConcat2(a, b) a##b
-#define slabConcat(a, b) slabConcat2(a, b)
-#define slabStaticAssert(condition) \
-    typedef char slabConcat(slabStaticAssert_, __LINE__)[(condition) ? 1 : -1]
-
-/* ---- Per-class arena layouts (documentation + static asserts; computed by arenaInit at runtime)---- */
+ /* ---- Per-class arena layouts (documentation + static asserts; computed by arenaInit at runtime)----
+ * The 32B header occupies whole slots; claims bump forward from headerSlots and freed
+ * slots re-enter via the LIFO list — no bitmap, no hint region, no threading pass. */
 
 // 16KB / 256B = 64 slots
 typedef struct {
-	ArenaHead head;              // 24B
-	uint64_t  bitMap[1];         //  8B -> 32B
-	uint32_t  recentFreeSlot;    // hint: most recently freed slot (claim scan start)
-	uint8_t   alignment[220];    // -> 256B (1 header slot)
+	ArenaHead head;              // 32B
+	uint8_t   alignment[224];    // -> 256B (1 header slot)
 	uint8_t   payload[256 * (64 - 1)]; // 63 slots
 } Arena16K_256B;
 
 // 16KB / 128B = 128 slots
 typedef struct {
-	ArenaHead head;              // 24B
-	uint64_t  bitMap[2];         // 16B -> 40B
-	uint32_t  recentFreeSlot;    // hint: most recently freed slot (claim scan start)
-	uint8_t   alignment[84];     // -> 128B (1 header slot)
+	ArenaHead head;              // 32B
+	uint8_t   alignment[96];     // -> 128B (1 header slot)
 	uint8_t   payload[128 * (128 - 1)]; // 127 slots
 } Arena16K_128B;
 
 // 16KB / 64B = 256 slots
 typedef struct {
-	ArenaHead head;              // 24B
-	uint64_t  bitMap[4];         // 32B -> 56B
-	uint32_t  recentFreeSlot;    // hint: most recently freed slot (claim scan start)
-	uint8_t   alignment[4];      // -> 64B (1 header slot)
+	ArenaHead head;              // 32B
+	uint8_t   alignment[32];     // -> 64B (1 header slot)
 	uint8_t   payload[64 * (256 - 1)]; // 255 slots
 } Arena16K_64B;
 
 // 16KB / 32B = 512 slots
 typedef struct {
-	ArenaHead head;              // 24B
-	uint64_t  bitMap[8];         // 64B -> 88B
-	uint32_t  recentFreeSlot;    // hint: most recently freed slot (claim scan start)
-	uint8_t   alignment[4];      // -> 96B (3 header slots)
-	uint8_t   payload[32 * (512 - 3)]; // 509 slots
+	ArenaHead head;              // 32B (1 header slot)
+	uint8_t   payload[32 * (512 - 1)]; // 511 slots
 } Arena16K_32B;
 
 // 16KB / 16B = 1024 slots
 typedef struct {
-	ArenaHead head;              // 24B
-	uint64_t  bitMap[16];        // 128B -> 152B
-	uint32_t  recentFreeSlot;    // hint: most recently freed slot (claim scan start)
-	uint8_t   alignment[4];      // -> 160B (10 header slots)
-	uint8_t   payload[16 * (1024 - 10)]; // 1014 slots
+	ArenaHead head;              // 32B (2 header slots)
+	uint8_t   payload[16 * (1024 - 2)]; // 1022 slots
 } Arena16K_16B;
 
-slabStaticAssert(sizeof(ArenaHead) == 24);
+// 16KB / 8B = 2048 slots
+typedef struct {
+	ArenaHead head;              // 32B (4 header slots)
+	uint8_t   payload[8 * (2048 - 4)]; // 2044 slots
+} Arena16K_8B;
+
+slabStaticAssert(sizeof(ArenaHead) == 32);
+slabStaticAssert(sizeof(Arena16K_8B) == ARENA_SIZE_SMALL);
 slabStaticAssert(sizeof(Arena16K_256B) == ARENA_SIZE_SMALL);
 slabStaticAssert(sizeof(Arena16K_128B) == ARENA_SIZE_SMALL);
 slabStaticAssert(sizeof(Arena16K_64B) == ARENA_SIZE_SMALL);
@@ -78,12 +69,7 @@ slabStaticAssert(sizeof(Arena16K_16B) == ARENA_SIZE_SMALL);
 /* ---- Internal constants ---- */
 static const uint32_t magicArenaSmall = 0x6D413136; /* "mA16" */
 static const uint32_t magicArenaSmallDropped = 0x6D413137; /* "mA17": payload pages dropped by trim */
-
-static const uint32_t arenaWalkBudget = 4; /* per-call budget for partial-chain walks */
-
-static const uint16_t slotClassTable[SLOT_CLASS_COUNT] = { 16, 32, 64, 128, 256 };
-static const uint16_t bitMapWordTable[SLOT_CLASS_COUNT] = { 16, 8, 4, 2, 1 };
-static const uint16_t headerSlotTable[SLOT_CLASS_COUNT] = { 10, 3, 1, 1, 1 };
+static const uint64_t arenaSlabCookie = 0x6D41534C41423131; /* "mASLAB11": context gate stamped by arenaSlab_init */
 
 /* ---- Statistics helpers (only with -DLOG_MALLOC_STATS)---- */
 #ifdef LOG_MALLOC_STATS
@@ -97,112 +83,41 @@ static uintptr_t alignUp(uintptr_t value, uintptr_t alignment) {
 	return (value + alignment - 1) & ~(alignment - 1);
 }
 
-static uint64_t* arenaBitmap(ArenaHead* arena) {
-	return (uint64_t*)((uint8_t*)arena + sizeof(ArenaHead));
-}
-
-/* Recent-free hint: lives in the header region's tail — the rounding slack every class
- * has (>= 8B), inside the always-kept header page, so it survives trim drops. */
-static uint32_t* arenaRecentFreeSlot(ArenaHead* arena) {
-	return (uint32_t*)((uint8_t*)arena + sizeof(ArenaHead) + (size_t)arena->bitMapCount * sizeof(uint64_t));
-}
-
 static uint32_t arenaCapacity(const ArenaHead* arena) {
-	return (uint32_t)arena->bitMapCount * 64 - arena->headerSlots;
+	return (uint32_t)(ARENA_SIZE_SMALL >> bits_ctz64(arena->classSize)) - arena->headerSlots;
 }
 
 static uint32_t arenaKeptBytes(uint32_t pageSize) {
 	return pageSize;
 }
 
-/* ---- Bitmap operations ----
- * Convention: bit=1 free, bit=0 used; allocation scans with ctz starting at the
- * recent-free hint word and wraps around the bitmap.
- */
+/* ---- Arena initialization ----
+ * O(1) on purpose: the freelist starts empty and claims bump forward from the tail
+ * (the bump position is derived from freeSlotCount — see arenaSlotClaim), so carving
+ * or reviving an arena never pays an O(slots) threading pass. */
+static void arenaInit(ArenaHead* arena, uint32_t arenaBytes, uint32_t shift, uint32_t magic) {
+	assert(shift >= SLOT_CLASS_SHIFT_MIN && shift < SLOT_CLASS_SHIFT_MIN + SLOT_CLASS_COUNT);
+	uint32_t classSize = (uint32_t)1 << shift; /* slot classes are powers of two (8..256) */
+	uint32_t totalSlots = arenaBytes >> shift;
+	uint32_t headerSlots = (uint32_t)(sizeof(ArenaHead) + classSize - 1) >> shift;
 
- /* Claim the lowest free bit of one word; -1 if the word is full */
-static int64_t bitmapClaimInWord(uint64_t* bitmap, uint32_t wordIndex) {
-	uint64_t word = bitmap[wordIndex];
-	if (word == 0) return -1;
-	uint32_t bitIndex = (uint32_t)bits_ctz64(word);
-	bitmap[wordIndex] = word & ~(((uint64_t)1) << bitIndex);
-	return (int64_t)(wordIndex * 64 + bitIndex);
-}
-
- /* Claim any free bit, return its slot index; -1 if none.
-  * Scans from startWord (the recent-free hint) and wraps around. */
-static int64_t bitmapClaimSlot(uint64_t* bitmap, uint32_t wordCount, uint32_t startWord) {
-	assert(startWord < wordCount); /* internal invariant: the hint is always a valid slot index */
-	for (uint32_t wordIndex = startWord; wordIndex < wordCount; wordIndex++) {
-		int64_t slotIndex = bitmapClaimInWord(bitmap, wordIndex);
-		if (slotIndex >= 0) return slotIndex;
-	}
-	for (uint32_t wordIndex = 0; wordIndex < startWord; wordIndex++) {
-		int64_t slotIndex = bitmapClaimInWord(bitmap, wordIndex);
-		if (slotIndex >= 0) return slotIndex;
-	}
-	return -1;
-}
-
-/* Set [startBit, startBit+runLength) to 1 (free) */
-static int64_t bitmapFindRun(const uint64_t* bitmap, uint32_t wordCount, uint32_t runLength) {
-	uint32_t pendingRun = 0;
-	int64_t  pendingStart = 0;
-	for (uint32_t wordIndex = 0; wordIndex < wordCount; wordIndex++) {
-		uint64_t remaining = bitmap[wordIndex];
-		uint32_t consumedBits = 0;
-		if (remaining == 0) { pendingRun = 0; continue; }
-		while (remaining != 0) {
-			uint32_t firstBit = (uint32_t)bits_ctz64(remaining);
-			if (firstBit > 0) pendingRun = 0;
-			remaining >>= firstBit;
-			uint32_t ones = (uint32_t)bits_ctz64(~remaining);
-			uint32_t runStartInWord = consumedBits + firstBit;
-			if (pendingRun == 0) pendingStart = (int64_t)(wordIndex * 64 + runStartInWord);
-			pendingRun += ones;
-			if (pendingRun >= runLength) return pendingStart;
-			if (runStartInWord + ones == 64) {
-				remaining = 0;
-			}
-			else {
-				pendingRun = 0;
-				remaining >>= ones;
-				consumedBits = runStartInWord + ones;
-			}
-		}
-	}
-	return -1;
-}
-
-/* ---- Arena initialization ---- */
-static void arenaInit(ArenaHead* arena, uint32_t arenaBytes, uint16_t classSize, uint32_t magic) {
-	uint32_t totalSlots = arenaBytes / classSize;
-	uint32_t bitmapWords = totalSlots / 64;
-	uint32_t headerSlots = (uint32_t)(sizeof(ArenaHead) + bitmapWords * sizeof(uint64_t) + classSize - 1) / classSize;
-
-	arena->classSize = classSize;
+	arena->classSize = (uint32_t)classSize;
 	arena->headerSlots = (uint16_t)headerSlots;
 	arena->freeSlotCount = (uint16_t)(totalSlots - headerSlots);
-	arena->bitMapCount = (uint16_t)bitmapWords;
 	arena->magic = magic;
-
-	uint64_t* bitmap = arenaBitmap(arena);
-	bitmap[0] = ~(((((uint64_t)1) << headerSlots) - 1));
-	for (uint32_t wordIndex = 1; wordIndex < bitmapWords; wordIndex++) {
-		bitmap[wordIndex] = ~(uint64_t)0;
-	}
-
-	*arenaRecentFreeSlot(arena) = 0; /* no free yet: start scanning from slot 0 */
+	arena->freeHead = (uint32_t)SLAB_SLOT_NONE;
 }
 
 /* ---- Segment operations ---- */
 
-/* Single-segment ownership check: returns the segment when address falls inside it */
+/* Single-segment ownership check: returns the segment when address falls inside the carved
+ * region [base, frontier) — every 16KB block there is a committed, initialized arena, so a
+ * positive answer makes the arena header safe to read. Addresses inside the reservation but
+ * beyond the frontier are PAGE_NOACCESS and must be rejected without dereferencing. */
 static Segment* segmentFind(ArenaSlabAllocator* context, uintptr_t address) {
 	Segment* segment = &context->segment;
 	if (segment->base == NULL) return NULL;
-	uintptr_t offset = address - (uintptr_t)segment->base;
-	if (offset < segment->bytes) return segment;
+	if (address >= (uintptr_t)segment->base && address < (uintptr_t)segment->frontier) return segment;
 	return NULL;
 }
 
@@ -224,13 +139,12 @@ static bool segmentEnsureCommitted(Segment* segment, uint8_t* neededEnd) {
 	return true;
 }
 
-static ArenaHead* segmentCarveArena(Segment* segment, uint32_t arenaBytes,
-	uint16_t classSize, uint32_t magic) {
+static ArenaHead* segmentCarveArena(Segment* segment, uint32_t arenaBytes, uint32_t shift, uint32_t magic) {
 	if ((uint64_t)(segment->frontier - segment->base) + arenaBytes > segment->bytes) return NULL;
 	if (!segmentEnsureCommitted(segment, segment->frontier + arenaBytes)) return NULL;
 	ArenaHead* arena = (ArenaHead*)segment->frontier;
 	segment->frontier += arenaBytes;
-	arenaInit(arena, arenaBytes, classSize, magic);
+	arenaInit(arena, arenaBytes, shift, magic);
 #ifdef LOG_MALLOC_STATS
 	slabLayerStats* stats = segmentStats(segment);
 	if (stats != NULL) stats->carveCount++;
@@ -239,25 +153,143 @@ static ArenaHead* segmentCarveArena(Segment* segment, uint32_t arenaBytes,
 }
 
 static void segmentPushArena(Segment* segment, uint32_t chainIndex, ArenaHead* arena) {
-	arena->next = segment->partial[chainIndex];
-	segment->partial[chainIndex] = (uint64_t)((uint8_t*)arena - segment->base);
+	uint8_t* base = segment->base; /* hoisted: relaxed aliasing forces a reload per access */
+	uint64_t self = (uint64_t)((uint8_t*)arena - base);
+	uint64_t headOffset = segment->partial[chainIndex];
+	arena->prev = (uint64_t)SLAB_OFFSET_NONE; /* pushed at the head: no predecessor */
+	arena->next = headOffset;
+	if (headOffset != (uint64_t)SLAB_OFFSET_NONE) {
+		((ArenaHead*)(base + headOffset))->prev = self;
+	}
+	segment->partial[chainIndex] = self;
+}
+
+/* Unlink the chain head: called when its last free slot was just claimed (off chain <=> full) */
+static void arenaPopHead(Segment* segment, uint32_t chainIndex, ArenaHead* arena) {
+	uint8_t* base = segment->base; /* hoisted: relaxed aliasing forces a reload per access */
+	uint64_t next = arena->next;
+	if (next != (uint64_t)SLAB_OFFSET_NONE) {
+		((ArenaHead*)(base + next))->prev = (uint64_t)SLAB_OFFSET_NONE; /* successor becomes the head */
+	}
+	segment->partial[chainIndex] = next;
+	arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
+	arena->prev = (uint64_t)SLAB_OFFSET_UNLINKED;
+}
+
+/* O(1) unlink from an arbitrary class-chain position (prev reaches the predecessor):
+ * called when a free just emptied the arena, right before it parks into the resident
+ * ring. Head and tail fall out of the sentinel math (prev == none => chain head).
+ * Field offsets are hoisted into locals BEFORE any store: with -relaxed-aliasing the
+ * compiler must otherwise re-read every header field it stores through. */
+static void chainDelink(Segment* segment, uint32_t chainIndex, ArenaHead* arena) {
+	uint8_t* base = segment->base; /* hoisted: relaxed aliasing forces a reload per access */
+	uint64_t prev = arena->prev;
+	uint64_t next = arena->next;
+	if (prev != (uint64_t)SLAB_OFFSET_NONE) ((ArenaHead*)(base + prev))->next = next;
+	else segment->partial[chainIndex] = next;
+	if (next != (uint64_t)SLAB_OFFSET_NONE) ((ArenaHead*)(base + next))->prev = prev;
+	arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
+	arena->prev = (uint64_t)SLAB_OFFSET_UNLINKED;
+}
+
+/* Shared pool of emptied shells, linked as a CIRCULAR doubly-linked ring (slab.c
+ * convention): free parks at the head (hottest), revival pops the head (a plain
+ * re-init, no syscall), trim pops the tail (coldest) to return pages. Pages stay
+ * committed while parked; head->prev is the ring tail, a singleton links to itself. */
+static void segmentRingPush(Segment* segment, ArenaHead* arena) {
+	uint8_t* base = segment->base; /* hoisted: relaxed aliasing forces a reload per access */
+	uint64_t self = (uint64_t)((uint8_t*)arena - base);
+	if (segment->residentCount == 0) {
+		arena->next = self; /* singleton ring: self-linked */
+		arena->prev = self;
+	}
+	else {
+		uint64_t headOffset = segment->resident;
+		uint64_t tailOffset = ((ArenaHead*)(base + headOffset))->prev; /* read once, used twice */
+		arena->next = headOffset;
+		arena->prev = tailOffset;
+		((ArenaHead*)(base + tailOffset))->next = self;
+		((ArenaHead*)(base + headOffset))->prev = self;
+	}
+	segment->resident = self;
+	segment->residentCount++;
+}
+
+/* Uniform O(1) unlink of a ring member: works for the head, the tail and the singleton
+ * (a singleton's next == prev == self, so the relinks degenerate and the head sentinel
+ * falls out of the self-check). Mirrors chainDelink's sentinel discipline. Field
+ * offsets are hoisted into locals BEFORE any store: with -relaxed-aliasing the compiler
+ * must otherwise re-read every header field it stores through. */
+static void segmentRingDelink(Segment* segment, ArenaHead* arena) {
+	uint8_t* base = segment->base; /* hoisted: relaxed aliasing forces a reload per access */
+	uint64_t self = (uint64_t)((uint8_t*)arena - base);
+	uint64_t nextOffset = arena->next;
+	uint64_t prevOffset = arena->prev;
+	((ArenaHead*)(base + nextOffset))->prev = prevOffset;
+	((ArenaHead*)(base + prevOffset))->next = nextOffset;
+	segment->resident = (nextOffset == self) ? (uint64_t)SLAB_OFFSET_NONE : nextOffset;
+	segment->residentCount--;
+	arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
+	arena->prev = (uint64_t)SLAB_OFFSET_UNLINKED;
+}
+
+static ArenaHead* segmentRingPopHead(Segment* segment) {
+	if (segment->residentCount == 0) return NULL;
+	ArenaHead* arena = (ArenaHead*)(segment->base + segment->resident); /* head = hottest */
+	segmentRingDelink(segment, arena);
+	return arena;
+}
+
+static ArenaHead* segmentRingPopTail(Segment* segment) {
+	if (segment->residentCount == 0) return NULL;
+	ArenaHead* arena = (ArenaHead*)(segment->base + ((ArenaHead*)(segment->base + segment->resident))->prev); /* tail = coldest */
+	segmentRingDelink(segment, arena);
+	return arena;
+}
+
+static void segmentPushRevive(Segment* segment, ArenaHead* arena) {
+	arena->next = segment->revive;
+	arena->prev = (uint64_t)SLAB_OFFSET_UNLINKED; /* revive is singly-linked: prev unused */
+	segment->revive = (uint64_t)((uint8_t*)arena - segment->base);
+}
+
+static ArenaHead* segmentPopRevive(Segment* segment) {
+	if (segment->revive == (uint64_t)SLAB_OFFSET_NONE) return NULL;
+	ArenaHead* arena = (ArenaHead*)(segment->base + segment->revive);
+	segment->revive = arena->next;
+	arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
+	return arena;
 }
 
 /* ---- Small layer ---- */
 
 static uint32_t slotClassIndexOf(size_t size) {
-	if (size <= 16) return 0;
-	if (size <= 32) return 1;
-	if (size <= 64) return 2;
-	if (size <= 128) return 3;
-	return 4;
+	/* classes tile [8, 256] in powers of two: shrink to 8B units ((size - 1) >> 3) and
+	 * the unit count's bit length IS the class index — branchless (lzcnt on the Release
+	 * target); sizes below 8 yield unit count 0 -> bit length 0 -> the 8B class, so no
+	 * clamp is needed. Callers guarantee size >= 1 (alloc maps 0 to SLOT_SIZE_MIN). */
+	/* debug guard: the caller contract — alloc remaps 0 and rejects oversize */
+	assert(size >= 1 && size <= SLOT_SIZE_MAX);
+	uint32_t classIndex = (uint32_t)(64 - bits_clz64((size - 1) >> 3));
+	/* debug guard: the tiling must stay exact */
+	assert(size <= (((size_t)1) << (classIndex + SLOT_CLASS_SHIFT_MIN)));
+	assert(classIndex == 0 || size > (((size_t)1) << (classIndex + SLOT_CLASS_SHIFT_MIN - 1)));
+	return classIndex;
 }
 
 static void* arenaSlotClaim(ArenaHead* arena, uint32_t shift) {
-	uint64_t* bitmap = arenaBitmap(arena);
-	uint32_t startWord = *arenaRecentFreeSlot(arena) >> 6;
-	int64_t slotIndex = bitmapClaimSlot(bitmap, arena->bitMapCount, startWord);
-	if (slotIndex < 0) return NULL;
+	uint32_t slotIndex = arena->freeHead;
+	if (slotIndex != (uint32_t)SLAB_SLOT_NONE) {
+		arena->freeHead = *(uint32_t*)((uint8_t*)arena + ((size_t)slotIndex << shift));
+	}
+	else {
+		/* freelist empty: the free range is the untouched bump tail — the invariant
+		 * freeSlotCount == totalSlots - bumpTop holds whenever the list is empty
+		 * (bump claims move both sides, list claims/frees never touch bumpTop) */
+		uint32_t totalSlots = ARENA_SIZE_SMALL >> shift;
+		slotIndex = totalSlots - arena->freeSlotCount;
+		if (slotIndex >= totalSlots) return NULL; /* count == 0: arena full */
+	}
 	arena->freeSlotCount--;
 	return (uint8_t*)arena + ((size_t)slotIndex << shift);
 }
@@ -265,96 +297,128 @@ static void* arenaSlotClaim(ArenaHead* arena, uint32_t shift) {
 static void* smallLayerAllocSlow(ArenaSlabAllocator* context, uint32_t classIndex);
 
 static void* smallLayerAlloc(ArenaSlabAllocator* context, uint32_t classIndex) {
-	ArenaHead* arena = context->currentSmall[classIndex];
-	if (arena != NULL && arena->magic == magicArenaSmall && arena->freeSlotCount > 0) {
-		void* slot = arenaSlotClaim(arena, classIndex + 4);
-		if (slot == NULL) return NULL;
-		if (arena->freeSlotCount == 0) {
-			context->currentSmall[classIndex] = NULL;
+	Segment* segment = &context->segment;
+	uint64_t offset = segment->partial[classIndex];
+	if (offset != (uint64_t)SLAB_OFFSET_NONE) {
+		ArenaHead* arena = (ArenaHead*)(segment->base + offset);
+		if (arena->magic == magicArenaSmall && arena->freeSlotCount > 0) {
+			void* slot = arenaSlotClaim(arena, classIndex + SLOT_CLASS_SHIFT_MIN);
+			if (slot != NULL && arena->freeSlotCount == 0) {
+				arenaPopHead(segment, classIndex, arena);
+			}
+			return slot;
 		}
-		return slot;
 	}
 	return smallLayerAllocSlow(context, classIndex);
 }
 
+/* Slow path: the chain head is a live partial arena by invariant (fulls unlink on their
+ * last claim, empties park on their last free) — a broken head is rejected, not healed,
+ * and a full head degrades to claim's NULL. An exhausted chain revives a shell from the
+ * shared pool (any class) or carves. */
 static void* smallLayerAllocSlow(ArenaSlabAllocator* context, uint32_t classIndex) {
-	uint16_t classSize = slotClassTable[classIndex];
+	uint32_t shift = classIndex + SLOT_CLASS_SHIFT_MIN;
 	Segment* segment = &context->segment;
 
-	uint64_t* link = &segment->partial[classIndex];
-	uint32_t budget = arenaWalkBudget;
-	while (*link != (uint64_t)SLAB_OFFSET_NONE && budget > 0) {
-		budget--;
-		ArenaHead* arena = (ArenaHead*)(segment->base + *link);
-		if (arena->magic == magicArenaSmallDropped) {
-			size_t reuseLength = ARENA_SIZE_SMALL - arenaKeptBytes(osPageSize());
-			if (!osPagesReuse((uint8_t*)arena + arenaKeptBytes(osPageSize()), reuseLength)) return NULL;
-			arena->magic = magicArenaSmall;
+	uint64_t offset = segment->partial[classIndex];
+	if (offset != (uint64_t)SLAB_OFFSET_NONE) {
+		ArenaHead* arena = (ArenaHead*)(segment->base + offset);
+		if (arena->magic != magicArenaSmall || arena->classSize != (((uint32_t)1) << shift)) {
+			return NULL;
+		}
+
+		void* slot = arenaSlotClaim(arena, shift);
+		if (slot == NULL) return NULL;
+		if (arena->freeSlotCount == 0) {
+			arenaPopHead(segment, classIndex, arena);
+		}
+		return slot;
+	}
+
+	/* class chain empty: revive a shell from the shared pool — the resident ring head
+	 * first (a plain re-init, no syscall), then the revive chain (osPagesReuse); fall
+	 * back to carving fresh VA */
+	ArenaHead* arena = segmentRingPopHead(segment);
+	if (arena == NULL) arena = segmentPopRevive(segment);
+	if (arena != NULL) {
+		if (arena->magic == magicArenaSmallDropped) { /* pages were dropped: re-commit them */
+			uint32_t pageSize = osPageSize(); /* one call: kept length and reuse base share it */
+			uint32_t keptBytes = arenaKeptBytes(pageSize);
+			size_t reuseLength = ARENA_SIZE_SMALL - keptBytes;
+			if (!osPagesReuse((uint8_t*)arena + keptBytes, reuseLength)) {
+				segmentPushRevive(segment, arena); /* put the shell back; state preserved */
+				return NULL;
+			}
 #ifdef LOG_MALLOC_STATS
 			slabLayerStats* stats = segmentStats(segment);
 			if (stats != NULL) { stats->reuseCalls++; stats->reuseBytes += reuseLength; }
 #endif
 		}
-		else if (arena->magic != magicArenaSmall || arena->classSize != classSize) {
-			return NULL;
-		}
-		if (arena->freeSlotCount == 0) {
-			*link = arena->next;
-			arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
-			continue;
-		}
-		void* slot = arenaSlotClaim(arena, classIndex + 4);
-		if (slot == NULL) return NULL;
-		context->currentSmall[classIndex] = arena;
-		if (arena->freeSlotCount == 0) {
-			*link = arena->next;
-			arena->next = (uint64_t)SLAB_OFFSET_UNLINKED;
-			context->currentSmall[classIndex] = NULL;
-		}
-		return slot;
+		/* always re-init: it is O(1) now, and it sanitizes whatever freelist state a
+		 * parked or dropped shell carries (use-after-free writes die here) */
+		arenaInit(arena, ARENA_SIZE_SMALL, classIndex + SLOT_CLASS_SHIFT_MIN, magicArenaSmall);
 	}
-
-	ArenaHead* arena = segmentCarveArena(segment, ARENA_SIZE_SMALL, classSize, magicArenaSmall);
-	if (arena == NULL) {
-		context->currentSmall[classIndex] = NULL;
-		return NULL;
+	else {
+		arena = segmentCarveArena(segment, ARENA_SIZE_SMALL, classIndex + SLOT_CLASS_SHIFT_MIN, magicArenaSmall);
+		if (arena == NULL) return NULL;
 	}
 	segmentPushArena(segment, classIndex, arena);
-	context->currentSmall[classIndex] = arena;
-	return arenaSlotClaim(arena, classIndex + 4);
+	return arenaSlotClaim(arena, classIndex + SLOT_CLASS_SHIFT_MIN);
 }
 
-static bool smallLayerFree(ArenaSlabAllocator* context, Segment* segment, ArenaHead* arena, void* pointer) {
+static bool smallLayerFree(Segment* segment, ArenaHead* arena, void* pointer) {
 	uintptr_t address = (uintptr_t)pointer;
 
-	uint32_t classIndex = SLOT_CLASS_COUNT;
-	for (uint32_t index = 0; index < SLOT_CLASS_COUNT; index++) {
-		if (slotClassTable[index] == arena->classSize) { classIndex = index; break; }
-	}
-	if (classIndex == SLOT_CLASS_COUNT) return false;
-	uint32_t shift = classIndex + 4;
-	if (arena->bitMapCount != bitMapWordTable[classIndex]) return false;
-	if (arena->headerSlots != headerSlotTable[classIndex]) return false;
+	/* slot classes are powers of two in [8, 256]: derive the class from classSize with ctz
+	 * (no table walk); the headerSlots cross-check guards the bounds math below */
+	uint32_t classSize = arena->classSize;
+	if (classSize < SLOT_SIZE_MIN || classSize > SLOT_SIZE_MAX) return false;
+	uint32_t shift = (uint32_t)bits_ctz64(classSize);
+	if ((((uint32_t)1) << shift) != classSize) return false;
+	uint32_t classIndex = shift - SLOT_CLASS_SHIFT_MIN;
+	uint32_t headerSlots = (uint32_t)(sizeof(ArenaHead) + classSize - 1) >> shift;
+	if (arena->headerSlots != headerSlots) return false;
 
 	uint32_t inArenaOffset = (uint32_t)(address - (uintptr_t)arena);
 	if (inArenaOffset & (((uint32_t)1 << shift) - 1)) return false;
 	uint32_t slotIndex = inArenaOffset >> shift;
-	if (slotIndex < arena->headerSlots) return false;
-	if (slotIndex >= (uint32_t)arena->bitMapCount * 64) return false;
+	uint32_t capacity = ((uint32_t)(ARENA_SIZE_SMALL >> shift)) - headerSlots;
+	if ((uint32_t)(slotIndex - headerSlots) >= capacity) return false; /* header slots + tail in one compare */
 
-	uint64_t* bitmap = arenaBitmap(arena);
-	uint64_t mask = ((uint64_t)1) << (slotIndex & 63);
-	if (bitmap[slotIndex >> 6] & mask) return false;
-
+	/* double-free is NOT detected by design: freed slot memory doubles as freelist state */
 	bool wasFull = arena->freeSlotCount == 0;
-	bitmap[slotIndex >> 6] |= mask;
+	*(uint32_t*)pointer = arena->freeHead; /* push onto the arena's LIFO free list */
+	arena->freeHead = slotIndex;
 	arena->freeSlotCount++;
-	*arenaRecentFreeSlot(arena) = slotIndex; /* recent-free hint: next claim starts here */
-	if (wasFull) {
-		if (arena->next == (uint64_t)SLAB_OFFSET_UNLINKED) {
-			segmentPushArena(segment, classIndex, arena);
+	if (arena->freeSlotCount == capacity) {
+		/* the arena just became empty (capacity >= 63, so this excludes wasFull): the
+		 * first CLASS_SPARE_KEEP empties of a class stay LINKED as warm spares — the
+		 * pair pattern re-claims them straight off the chain head with zero relink
+		 * churn. Beyond the quota the arena parks into the shared resident ring (pages
+		 * stay committed, revival is a plain re-init). Corruption guard wraps every
+		 * relinking path: never touch a shell we cannot prove is chained. */
+		if (arena->next != (uint64_t)SLAB_OFFSET_UNLINKED && arena->prev != (uint64_t)SLAB_OFFSET_UNLINKED) {
+			uint64_t self = (uint64_t)((uint8_t*)arena - segment->base);
+			uint32_t hit = CLASS_SPARE_KEEP;
+			for (uint32_t spareIndex = 0; spareIndex < segment->spareCount[classIndex]; spareIndex++) {
+				if (segment->spare[classIndex][spareIndex] == self) { hit = spareIndex; break; }
+			}
+			if (hit != CLASS_SPARE_KEEP) {
+				/* already a recorded spare: stays linked, nothing to do */
+			}
+			else if (segment->spareCount[classIndex] < CLASS_SPARE_KEEP) {
+				segment->spare[classIndex][segment->spareCount[classIndex]++] = self; /* stays linked */
+			}
+			else {
+				chainDelink(segment, classIndex, arena);
+				segmentRingPush(segment, arena);
+			}
 		}
-		context->currentSmall[classIndex] = arena;
+		/* guard failed: leave the shell as-is (degraded, same as before) */
+	}
+	else if (wasFull && arena->next == (uint64_t)SLAB_OFFSET_UNLINKED) {
+		/* full arenas are off-chain: back to the head, so the next claim finds it */
+		segmentPushArena(segment, classIndex, arena);
 	}
 	return true;
 }
@@ -363,71 +427,71 @@ static bool smallLayerFree(ArenaSlabAllocator* context, Segment* segment, ArenaH
 
 bool arenaSlab_init(ArenaSlabAllocator* context, uint8_t segmentSizeExponent) {
 	if (context == NULL) return false;
-	if (context->initialized) return true;
-	if (segmentSizeExponent < SEGMENT_SIZE_EXPONENT_MIN || segmentSizeExponent > SEGMENT_SIZE_EXPONENT_MAX) return false;
+	if (context->cookie == arenaSlabCookie) return true;
+	/* no blanket memset (cache pollution): every field the allocator reads is written
+	 * below, so garbage / foreign / never-zeroed memory is rebuilt in place either way.
+	 * Failure paths only clear the cookie — the gate then rejects everything else. */
+	/* zero is a VALID chain offset (the first arena sits at segment base + 0), so the
+	 * empty-chain sentinels must be written explicitly — zeroed memory would alias them
+	 * with "arena at offset 0" and the alloc paths would deref uncommitted memory */
+	for (uint32_t chainIndex = 0; chainIndex < SLOT_CLASS_COUNT; chainIndex++) {
+		context->segment.partial[chainIndex] = (uint64_t)SLAB_OFFSET_NONE;
+		context->segment.spareCount[chainIndex] = 0; /* spare[] is only read up to count */
+	}
+	context->segment.resident = (uint64_t)SLAB_OFFSET_NONE;
+	context->segment.residentCount = 0;
+	context->segment.revive = (uint64_t)SLAB_OFFSET_NONE;
+	if (segmentSizeExponent < SEGMENT_SIZE_EXPONENT_MIN || segmentSizeExponent > SEGMENT_SIZE_EXPONENT_MAX) {
+		context->cookie = 0; /* failed attempts must not half-initialize: the gate stays shut */
+		return false;
+	}
 
 	uint64_t segmentBytes = ((uint64_t)1 << segmentSizeExponent);
-
-	Segment* segment = &context->segment;
-	segment->base = NULL;
-	segment->frontier = NULL;
-	segment->committedEnd = NULL;
-	segment->bytes = 0;
-	for (uint32_t chainIndex = 0; chainIndex < SLOT_CLASS_COUNT; chainIndex++) {
-		segment->partial[chainIndex] = (uint64_t)SLAB_OFFSET_NONE;
-	}
-	segment->reserveBase = NULL;
-	segment->reserveSize = 0;
-	for (uint32_t classIndex = 0; classIndex < SLOT_CLASS_COUNT; classIndex++) {
-		context->currentSmall[classIndex] = NULL;
-	}
-#ifdef LOG_MALLOC_STATS
-	memset(&context->stats, 0, sizeof(context->stats));
-	segment->ownerStats = &context->stats;
-#endif
-
 	uint8_t* base = NULL;
 	uint8_t* reserveBase = NULL;
 	size_t reserveSize = 0;
 	if (!osSegmentReserve(segmentBytes, &base, &reserveBase, &reserveSize)) {
-		arenaSlab_shutdown(context);
+		context->cookie = 0; /* nothing was reserved, nothing leaks; the gate stays shut */
 		return false;
 	}
+
+	Segment* segment = &context->segment;
 	segment->base = base;
 	segment->frontier = base;
 	segment->committedEnd = base;
 	segment->bytes = segmentBytes;
 	segment->reserveBase = reserveBase;
 	segment->reserveSize = reserveSize;
-
-	context->initialized = true;
+#ifdef LOG_MALLOC_STATS
+	segment->ownerStats = &context->stats;
+	memset(&context->stats, 0, sizeof(context->stats)); /* debug-only: counters start clean */
+#endif
+	context->cookie = arenaSlabCookie;
 	return true;
 }
 
 void arenaSlab_shutdown(ArenaSlabAllocator* context) {
-	if (context == NULL) return;
-	for (uint32_t classIndex = 0; classIndex < SLOT_CLASS_COUNT; classIndex++) {
-		context->currentSmall[classIndex] = NULL;
-	}
-	Segment* segment = &context->segment;
-	osSegmentRelease((uint8_t*)segment->reserveBase, segment->reserveSize);
-	segment->base = NULL;
-	segment->frontier = NULL;
-	segment->committedEnd = NULL;
-	segment->bytes = 0;
-	for (uint32_t chainIndex = 0; chainIndex < SLOT_CLASS_COUNT; chainIndex++) {
-		segment->partial[chainIndex] = (uint64_t)SLAB_OFFSET_NONE;
-	}
-	segment->reserveBase = NULL;
-	segment->reserveSize = 0;
-#ifdef LOG_MALLOC_STATS
-	memset(&context->stats, 0, sizeof(context->stats));
-#endif
-	context->initialized = false;
+	if (context == NULL || context->cookie != arenaSlabCookie) return; /* never-inited / foreign: owns no reservation, nothing to release */
+	osSegmentRelease((uint8_t*)context->segment.reserveBase, context->segment.reserveSize);
+	/* gate shut: repeated shutdown is a no-op, re-init rebuilds in place — one cache-line
+	 * touch instead of scrubbing the whole context (stale pointers stay unreachable) */
+	context->cookie = 0;
+}
+
+/* Range + magic resolution shared by free / realloc / usable_size: cookie gate, segment
+ * range check, arena-head mask and the live-magic validation in one pass. Returns NULL
+ * for foreign / uninitialized / non-live pointers (the caller decides the verdict).
+ * which() deliberately does NOT use this: it is a pure range check by contract. */
+static ArenaHead* segmentResolveArena(ArenaSlabAllocator* context, void* pointer) {
+	if (context == NULL || context->cookie != arenaSlabCookie || pointer == NULL) return NULL;
+	if (segmentFind(context, (uintptr_t)pointer) == NULL) return NULL;
+	ArenaHead* arena = (ArenaHead*)((uintptr_t)pointer & ~(uintptr_t)(ARENA_SIZE_SMALL - 1));
+	if (arena->magic != magicArenaSmall) return NULL;
+	return arena;
 }
 
 void* arenaSlab_alloc(ArenaSlabAllocator* context, size_t size) {
-	if (context == NULL || !context->initialized) return NULL;
+	if (context == NULL || context->cookie != arenaSlabCookie) return NULL;
 	if (size == 0) size = SLOT_SIZE_MIN;
 	if (size > SLOT_SIZE_MAX) return NULL;
 	void* pointer = smallLayerAlloc(context, slotClassIndexOf(size));
@@ -445,30 +509,25 @@ void* arenaSlab_alloc(ArenaSlabAllocator* context, size_t size) {
 }
 
 bool arenaSlab_free(ArenaSlabAllocator* context, void* pointer) {
-	if (context == NULL || !context->initialized) return false;
+	if (context == NULL || context->cookie != arenaSlabCookie) return false;
 	if (pointer == NULL) return true;
-	uintptr_t address = (uintptr_t)pointer;
-
-	ArenaHead* arena = (ArenaHead*)(address & ~(uintptr_t)(ARENA_SIZE_SMALL - 1));
-	if (arena->magic == magicArenaSmall) {
-		Segment* segment = segmentFind(context, address);
-		if (segment != NULL) {
+	/* the resolve is pure arithmetic: a bogus pointer must never be dereferenced beyond
+	 * its (range-proven, live-magic) arena header */
+	ArenaHead* arena = segmentResolveArena(context, pointer);
+	if (arena == NULL) return false;
 #ifdef LOG_MALLOC_STATS
-			size_t freedBytes = arena->classSize;
+	size_t freedBytes = arena->classSize;
 #endif
-			bool ok = smallLayerFree(context, segment, arena, pointer);
+	bool ok = smallLayerFree(&context->segment, arena, pointer);
 #ifdef LOG_MALLOC_STATS
-			if (ok) { context->stats.freeCount++; context->stats.freeBytes += freedBytes; }
-			else { context->stats.freeRejected++; }
+	if (ok) { context->stats.freeCount++; context->stats.freeBytes += freedBytes; }
+	else { context->stats.freeRejected++; }
 #endif
-			return ok;
-		}
-	}
-	return false;
+	return ok;
 }
 
 void* arenaSlab_realloc(ArenaSlabAllocator* context, void* pointer, size_t newSize) {
-	if (context == NULL || !context->initialized) return NULL;
+	if (context == NULL || context->cookie != arenaSlabCookie) return NULL;
 	if (pointer == NULL) return arenaSlab_alloc(context, newSize);
 	if (newSize == 0) {
 		arenaSlab_free(context, pointer);
@@ -476,27 +535,42 @@ void* arenaSlab_realloc(ArenaSlabAllocator* context, void* pointer, size_t newSi
 	}
 	/* Realloc is only supported for small objects; otherwise caller's problem. */
 	if (newSize > SLOT_SIZE_MAX) { arenaSlab_free(context, pointer); return NULL; }
-	slabLayer layer = arenaSlab_which(context, pointer);
-	size_t oldUsable = arenaSlab_usable_size(context, pointer);
-	if (layer != SLAB_LAYER_SMALL || oldUsable == 0) return NULL;
+	/* single validation pass (calling which + usable_size would walk the segment twice) */
+	ArenaHead* arena = segmentResolveArena(context, pointer);
+	if (arena == NULL) return NULL;
+	size_t oldUsable = arena->classSize;
 	if (oldUsable >= newSize) return pointer;
 	void* newPointer = arenaSlab_alloc(context, newSize);
 	if (newPointer == NULL) return NULL;
-	memcpy(newPointer, pointer, oldUsable < newSize ? oldUsable : newSize);
+	memcpy(newPointer, pointer, oldUsable); /* oldUsable < newSize is established above */
 	arenaSlab_free(context, pointer);
 	return newPointer;
 }
 
+/* The only API that touches payload bytes: a plain alloc plus a zero fill. A zero total
+ * follows alloc's size-0 rule (an 8B slot with nothing to zero). */
+void* arenaSlab_calloc(ArenaSlabAllocator* context, size_t count, size_t size) {
+	if (size != 0 && count > (size_t)-1 / size) return NULL; /* count * size would overflow */
+	size_t total = count * size;
+	void* pointer = arenaSlab_alloc(context, total);
+	if (pointer != NULL) memset(pointer, 0, total);
+	return pointer;
+}
+
+/* Size gate for alloc / realloc: everything up to SLOT_SIZE_MAX is permissible — alloc
+ * treats 0 as SLOT_SIZE_MIN and realloc treats 0 as free; larger sizes are the caller's
+ * business (alloc returns NULL, realloc frees and returns NULL). */
+bool arenaSlab_permissible_size(size_t size) {
+	return size <= SLOT_SIZE_MAX;
+}
+
 size_t arenaSlab_usable_size(ArenaSlabAllocator* context, void* pointer) {
-	if (context == NULL || !context->initialized || pointer == NULL) return 0;
-	if (arenaSlab_which(context, pointer) != SLAB_LAYER_SMALL) return 0;
-	ArenaHead* arena = (ArenaHead*)((uintptr_t)pointer & ~(uintptr_t)(ARENA_SIZE_SMALL - 1));
-	if (arena->magic != magicArenaSmall) return 0;
-	return arena->classSize;
+	ArenaHead* arena = segmentResolveArena(context, pointer);
+	return (arena != NULL) ? arena->classSize : 0;
 }
 
 slabLayer arenaSlab_which(ArenaSlabAllocator* context, void* pointer) {
-	if (context == NULL || pointer == NULL) return SLAB_LAYER_NONE;
+	if (context == NULL || context->cookie != arenaSlabCookie || pointer == NULL) return SLAB_LAYER_NONE;
 	if (segmentFind(context, (uintptr_t)pointer) != NULL) return SLAB_LAYER_SMALL;
 	return SLAB_LAYER_NONE;
 }
@@ -505,45 +579,48 @@ slabLayer arenaSlab_which(ArenaSlabAllocator* context, void* pointer) {
  * base (store offset, decode base + offset) without poking into the struct internals.
  * It is deliberately not a pointer — the API never hands out the segment as an object. */
 uintptr_t arenaSlab_segmentBase(ArenaSlabAllocator* context) {
-	if (context == NULL || !context->initialized) return 0;
+	if (context == NULL || context->cookie != arenaSlabCookie) return 0;
 	return (uintptr_t)context->segment.base;
 }
 
-/* ---- Lazy return (small only) ---- */
-static size_t trimSmallLayer(ArenaSlabAllocator* context) {
-	uint32_t pageSize = osPageSize();
+/* ---- Lazy return (small only) ----
+ * Two-phase by design: free parks emptied arenas into the shared resident ring; trim is
+ * the ONLY place that returns pages to the OS — it drops the coldest ring tail while the
+ * ring exceeds TRIM_POOL_MAX_RESIDENT, re-homing the shells to the revive chain. The
+ * water-mark shells stay warm for free revival between trims. */
+static size_t trimResidentRing(ArenaSlabAllocator* context) {
 	size_t droppedBytes = 0;
+	uint32_t pageSize = osPageSize();
 	Segment* segment = &context->segment;
-	for (uint32_t classIndex = 0; classIndex < SLOT_CLASS_COUNT; classIndex++) {
-		uint64_t arenaOffset = segment->partial[classIndex];
-		while (arenaOffset != (uint64_t)SLAB_OFFSET_NONE) {
-			ArenaHead* arena = (ArenaHead*)(segment->base + arenaOffset);
-			if (arena->magic != magicArenaSmall) return droppedBytes;
-			if (arena->freeSlotCount == arenaCapacity(arena) && pageSize < ARENA_SIZE_SMALL) {
-				size_t dropLength = ARENA_SIZE_SMALL - pageSize;
-				if (osPagesDrop((uint8_t*)arena + pageSize, dropLength)) {
-					droppedBytes += dropLength;
-					arena->magic = magicArenaSmallDropped;
+	while (segment->residentCount > TRIM_POOL_MAX_RESIDENT) {
+		ArenaHead* arena = segmentRingPopTail(segment);
+		if (pageSize < ARENA_SIZE_SMALL) {
+			size_t dropLength = ARENA_SIZE_SMALL - pageSize;
+			if (osPagesDrop((uint8_t*)arena + pageSize, dropLength)) {
+				droppedBytes += dropLength;
+				arena->magic = magicArenaSmallDropped; /* revival must pay osPagesReuse */
 #ifdef LOG_MALLOC_STATS
-					slabLayerStats* stats = segmentStats(segment);
-					if (stats != NULL) { stats->dropCalls++; stats->dropBytes += dropLength; }
+				slabLayerStats* stats = segmentStats(segment);
+				if (stats != NULL) { stats->dropCalls++; stats->dropBytes += dropLength; }
 #endif
-				}
 			}
-			arenaOffset = arena->next;
+			/* drop failed: pages are still resident, but the ring is over the water mark —
+			 * the shell must NOT re-enter the ring (infinite loop); it waits on the revive
+			 * chain with its magic intact, so revival skips the reuse and stays free */
 		}
+		segmentPushRevive(segment, arena);
 	}
 	return droppedBytes;
 }
 
 size_t arenaSlab_trim(ArenaSlabAllocator* context) {
-	if (context == NULL || !context->initialized) return 0;
-	return trimSmallLayer(context);
+	if (context == NULL || context->cookie != arenaSlabCookie) return 0;
+	return trimResidentRing(context);
 }
 
 /* ---- Statistics ---- */
 void arenaSlab_statsReset(ArenaSlabAllocator* context) {
-	if (context == NULL) return;
+	if (context == NULL || context->cookie != arenaSlabCookie) return;
 #ifdef LOG_MALLOC_STATS
 	memset(&context->stats, 0, sizeof(context->stats));
 #endif
@@ -574,7 +651,7 @@ void arenaSlab_dumpStats(ArenaSlabAllocator* context) {
 #ifndef LOG_MALLOC_STATS
 	(void)context;
 #else
-	if (context == NULL || !context->initialized) {
+	if (context == NULL || context->cookie != arenaSlabCookie) {
 		printf("slab stats: not initialized\n");
 		return;
 	}
@@ -583,36 +660,52 @@ void arenaSlab_dumpStats(ArenaSlabAllocator* context) {
 	printf("[small]\n");
 	dumpLayerEvents(&context->stats);
 	{
-		uint64_t arenaTotal = 0, emptyCount = 0, fullCount = 0, droppedCount = 0;
+		uint64_t totalArenas = 0, chainArenas = 0, reviveCount = 0;
 		uint64_t liveSlots = 0, capacitySlots = 0;
 		Segment* segment = &context->segment;
+		/* every 16KB block inside [base, frontier) is an initialized arena (carve advances
+		 * in whole-arena units and inits immediately; dropped shells keep their header page
+		 * committed) — this walk is the only one that sees FULL arenas, which are off-chain */
+		for (uint64_t offset = 0; offset < (uint64_t)(segment->frontier - segment->base); offset += ARENA_SIZE_SMALL) {
+			ArenaHead* arena = (ArenaHead*)(segment->base + offset);
+			uint32_t capacity = arenaCapacity(arena);
+			assert(arena->magic == magicArenaSmall || arena->magic == magicArenaSmallDropped);
+			totalArenas++;
+			capacitySlots += capacity;
+			liveSlots += capacity - arena->freeSlotCount;
+		}
 		for (uint32_t classIndex = 0; classIndex < SLOT_CLASS_COUNT; classIndex++) {
+			uint32_t emptyInClass = 0;
 			uint64_t arenaOffset = segment->partial[classIndex];
 			while (arenaOffset != (uint64_t)SLAB_OFFSET_NONE) {
 				ArenaHead* arena = (ArenaHead*)(segment->base + arenaOffset);
-				arenaTotal++;
-				uint32_t capacity = arenaCapacity(arena);
-				capacitySlots += capacity;
-				liveSlots += capacity - arena->freeSlotCount;
-				if (arena->freeSlotCount == capacity) emptyCount++;
-				if (arena->freeSlotCount == 0) fullCount++;
-				if (arena->magic == magicArenaSmallDropped) droppedCount++;
+				chainArenas++;
+				/* invariant: chains hold partial arenas plus at most CLASS_SPARE_KEEP warm
+				 * empties (the recorded spares) — more empties mean broken bookkeeping */
+				if (arena->freeSlotCount == arenaCapacity(arena)) emptyInClass++;
 				arenaOffset = arena->next;
 			}
+			assert(emptyInClass <= CLASS_SPARE_KEEP);
 		}
-		printf("  State: arenas %llu (empty %llu / partial %llu / full %llu / dropped %llu), slots live %llu / %llu\n",
-			(unsigned long long)arenaTotal, (unsigned long long)emptyCount,
-			(unsigned long long)(arenaTotal - emptyCount - fullCount),
-			(unsigned long long)fullCount, (unsigned long long)droppedCount,
+		uint64_t residentShells = segment->residentCount; /* O(1): maintained by push/pop */
+		uint64_t reviveOffset = segment->revive;
+		while (reviveOffset != (uint64_t)SLAB_OFFSET_NONE) {
+			ArenaHead* arena = (ArenaHead*)(segment->base + reviveOffset);
+			reviveCount++;
+			reviveOffset = arena->next;
+		}
+		/* everything carved that is neither chained, parked in the ring nor waiting in the
+		 * revive chain must be a full arena (off-chain by design) */
+		uint64_t fullArenas = totalArenas - chainArenas - residentShells - reviveCount;
+		printf("  State: arenas %llu (chain %llu partial+spare | full %llu | resident %llu / revive %llu), slots live %llu / %llu\n",
+			(unsigned long long)totalArenas, (unsigned long long)chainArenas,
+			(unsigned long long)fullArenas,
+			(unsigned long long)residentShells,
+			(unsigned long long)reviveCount,
 			(unsigned long long)liveSlots, (unsigned long long)capacitySlots);
 		dumpSegmentWatermarks(segment);
 	}
 #endif
-}
-
-/* ---- Test hook (not part of the public API)---- */
-int64_t slabDebugFindRun(const uint64_t* bitmap, uint32_t wordCount, uint32_t runLength) {
-	return bitmapFindRun(bitmap, wordCount, runLength);
 }
 
 /* ---- Default instance ---- */

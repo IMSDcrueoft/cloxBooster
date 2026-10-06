@@ -49,14 +49,14 @@ v1.0.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 (cloxBooster & clox).
 |fib40|5.281s|6.421s|6.561s|9.677s|
 |loop 1e8|0.412s|0.654s|0.702s|1.109s|
 |global loop 1e8|0.760s|0.840s|0.93s|2.044s|
-|binary_trees|1.027s|1.752s|2.575s|1.996s|
-|instantiation|0.630s|0.519s|0.953s|0.945s|
+|binary_trees|1.132s|1.752s|2.575s|1.996s|
+|instantiation|0.336s|0.519s|0.953s|0.945s|
 |invocation|0.203s|0.209s|0.22s|0.235s|
 |method_call|0.125s|0.129s|0.135s|0.167s|
 |properties|0.276s|0.286s|0.296s|0.377s|
 |trees|1.642s|3.042s|4.888s|3.553s|
 |zoo|0.264s|0.252s|0.238s|0.282s|
-|zoo_batch(10sec)|6251batch|—|6850batch|5398batch|
+|zoo_batch(10sec)|6323batch|—|6850batch|5398batch|
 
 ---
 
