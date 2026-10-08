@@ -161,6 +161,10 @@ static inline bool isObjType(Value value, ObjType type) {
 ObjString* copyString(C_STR chars, uint32_t length, bool escapeChars);
 ObjString* connectString(ObjString* strA, ObjString* strB);
 
+//memcmp-style three-way ordering for string pairs:
+//byte compare over the common prefix, then the shorter operand is the smaller one
+int compareObjStrings(const ObjString* a, const ObjString* b);
+
 void printObject(Value value, bool isExpand);
 
 StringEntry* getStringEntryInPool(ObjString* string);

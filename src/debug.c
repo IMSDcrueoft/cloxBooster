@@ -303,7 +303,6 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 	case OP_JIF_NOT_EQUAL_LC:
 		return jifLCInstruction("OP_JIF_NOT_EQUAL_LC", chunk, offset);
 
-#if ENABLE_JIF_LL
 	case OP_JIF_LESS_LL:
 		return jifLLInstruction("OP_JIF_LESS_LL", chunk, offset);
 	case OP_JIF_LESS_EQUAL_LL:
@@ -312,7 +311,6 @@ uint32_t disassembleInstruction(Chunk* chunk, uint32_t offset) {
 		return jifLLInstruction("OP_JIF_EQUAL_LL", chunk, offset);
 	case OP_JIF_NOT_EQUAL_LL:
 		return jifLLInstruction("OP_JIF_NOT_EQUAL_LL", chunk, offset);
-#endif
 
 	default:
 		printf("Unknown opcode %d offset = %d\n", instruction, offset);

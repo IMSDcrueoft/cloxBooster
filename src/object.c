@@ -306,6 +306,15 @@ ObjString* connectString(ObjString* strA, ObjString* strB) {
 	}
 }
 
+//memcmp-style three-way ordering for string pairs:
+//byte compare over the common prefix, then the shorter operand is the smaller one
+int compareObjStrings(const ObjString* a, const ObjString* b) {
+	uint32_t common = (a->length < b->length) ? a->length : b->length;
+	int cmp = memcmp(a->chars, b->chars, common);
+	if (cmp != 0) return cmp;
+	return (a->length < b->length) ? -1 : ((a->length > b->length) ? 1 : 0);
+}
+
 static void printFunction(ObjFunction* function) {
 	if (function->name == NULL) {
 		printf("<script> (%d)", function->id);
