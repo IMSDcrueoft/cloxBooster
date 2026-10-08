@@ -21,6 +21,8 @@ ClassCompiler* currentClass = NULL;
 static void declaration();
 static void expression();
 static void statement();
+static void statementInner();
+static void parsePrecedenceInner(Precedence precedence);
 //need to declare first
 static ParseRule* getRule(TokenType type);
 static void namedVariable(Token name, bool canAssign);
@@ -465,7 +467,44 @@ static void endScope() {
 	}
 }
 
+//emit the same close/pop sequence endScope would, from the innermost local
+//down to `target`, without releasing the local records: the code after
+//break/continue still needs them for name resolution, and the block's own
+//endScope cleanup bytes become dead code after the jump (harmless)
+static void closeLoopLocals(uint32_t target) {
+	uint32_t popCount = 0;
+	for (int32_t i = current->localCount - 1; i >= (int32_t)target; i--) {
+		if (current->locals[i].isCaptured) {
+			if (popCount > 0) {
+				emitPopCount(popCount);
+				popCount = 0;
+			}
+			emitByte(OP_CLOSE_UPVALUE);
+			clearOpStack();
+		}
+		else {
+			++popCount;
+		}
+	}
+
+	if (popCount > 0) {
+		emitPopCount(popCount);
+	}
+}
+
+//recursion guard:parens/unary/and-or/subscript chains recurse through here,
+//nesting beyond the cap would overflow the C stack
 static void parsePrecedence(Precedence precedence) {
+	if (parser.parseDepth >= MAX_PARSE_DEPTH) {
+		error("Code nesting is too deep.");
+		return;
+	}
+	parser.parseDepth++;
+	parsePrecedenceInner(precedence);
+	parser.parseDepth--;
+}
+
+static void parsePrecedenceInner(Precedence precedence) {
 	advance();
 
 	ParseFn prefixRule = getRule(parser.previous.type)->prefix;
@@ -1027,8 +1066,7 @@ static void breakStatement() {
 		return;
 	}
 
-	uint16_t offsetParam = current->localCount - current->currentLoop->enterParamCount;
-	emitPopCount(offsetParam);
+	closeLoopLocals(current->currentLoop->enterParamCount);
 	int32_t jump = emitJump(OP_JUMP);
 
 	if (current->currentLoop->breakJumpCount == current->currentLoop->breakJumpCapacity) {
@@ -1056,8 +1094,7 @@ static void continueStatement() {
 		return;
 	}
 
-	uint16_t offsetParam = current->localCount - current->currentLoop->enterParamCount;
-	emitPopCount(offsetParam);
+	closeLoopLocals(current->currentLoop->enterParamCount);
 	emitLoop(current->currentLoop->start);
 	consume(TOKEN_SEMICOLON, "Expect ';' after 'continue'.");
 }
@@ -1088,7 +1125,18 @@ static void synchronize() {
 	}
 }
 
+//recursion guard:if/else chains and nested blocks recurse through here
 static void statement() {
+	if (parser.parseDepth >= MAX_PARSE_DEPTH) {
+		error("Code nesting is too deep.");
+		return;
+	}
+	parser.parseDepth++;
+	statementInner();
+	parser.parseDepth--;
+}
+
+static void statementInner() {
 	if (match(TOKEN_PRINT)) {
 		printStatement();
 	}
@@ -1600,6 +1648,7 @@ ObjFunction* compile(C_STR source, FunctionType compileType) {
 	//init flags
 	parser.hadError = false;
 	parser.panicMode = false;
+	parser.parseDepth = 0;
 
 	advance();
 
