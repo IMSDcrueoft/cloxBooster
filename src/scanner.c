@@ -297,6 +297,7 @@ static Token string() {
 				case '"':  // '\"'
 				case '\\': // '\\'
 				case 'n':  // '\n'
+				case 't':  // '\t'
 					isEscapeString = true;
 				default:
 					break;
