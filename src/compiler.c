@@ -311,7 +311,7 @@ static uint32_t makeConstant(Value value) {
 		NumberEntry* entry = getNumberEntryInPool(&value);
 
 		if (entry->index == UINT32_MAX) {
-			return (entry->index = addConstant(value) & UINT16_MAX);//set value and return
+			return (entry->index = addConstant(value));//set value and return, range check happens in emitConstantCommond
 		}
 		else {
 			return entry->index;
@@ -322,7 +322,7 @@ static uint32_t makeConstant(Value value) {
 		StringEntry* entry = getStringEntryInPool(AS_STRING(value));
 
 		if (entry->index == UINT32_MAX) {
-			return (entry->index = addConstant(value) & UINT16_MAX);//set value and return
+			return (entry->index = addConstant(value));//set value and return, range check happens in emitConstantCommond
 		}
 		else {
 			return entry->index;
