@@ -6,7 +6,7 @@
 #pragma once
 
 // cloxBooster uses the standard library allocator. The only third-party
-// dependency is the bundled slabAllocator (third-party/slabAllocator) used to
+// dependency is the bundled memAllocator (third-party/memAllocator) used to
 // speed up fixed-size object allocation.
 #include <stdlib.h>
 

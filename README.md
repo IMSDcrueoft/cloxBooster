@@ -1,5 +1,5 @@
 # cloxBooster
-![Version](https://img.shields.io/badge/version-1.4.1-blue)
+![Version](https://img.shields.io/badge/version-1.5.0-blue)
 
 **cloxBooster** is a trimmed-down fork of the [LoxFlux](https://github.com/IMSDcrueoft/LoxFlux) project(ver 0.10.1). It is a stack-based bytecode virtual machine reimplementation of the cLox interpreter described in "Crafting Interpreters".
 
@@ -31,32 +31,33 @@ Lox is a programming language designed for learning purposes. It is conceived as
 - **Detached static and dynamic objects**: Static objects such as strings/functions, they don't usually bloat very much, so I think it's a viable option not to recycle them.
 - **Compilation-time optimizations**: Provides basic constant folding and super instruction.
 - **Instruction Dispatching**: Use `direct threading code` instead of `switch case` in compilers that support compute goto(clang & gcc).
-- **Slab object allocation**: Fixed-size objects (`ObjUpvalue`, `ObjClosure`, `ObjBoundMethod`, `ObjInstance`) are allocated from per-type slab caches (third-party/slabAllocator) instead of the raw heap, speeding up instantiation. Live units are counted into the GC bookkeeping; idle cache units are not.
+- **Slab object allocation**: Fixed-size objects (`ObjUpvalue`, `ObjClosure`, `ObjBoundMethod`, `ObjInstance`) are allocated from the bundled arena slab (≤256B size classes, `third-party/memAllocator`) instead of the raw heap, speeding up instantiation. Live units are counted into the GC bookkeeping; idle cache units are not.
 
 ---
 
 #### Performance test
 
 All values are in **seconds** (reported by the `clock()` global).
+v1.5.X: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 22
 v1.4.X: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 22
 v1.3.X: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20
 v1.0.0: AMD Ryzen7-5800X, Windows 11, ClangCL/LLVM 20 (cloxBooster & clox).
 
-|program|cloxBooster - [1.4.1]|cloxBooster - [1.3.0]|cloxBooster - [1.0.0]|clox|
-|---|---|---|---|---|
-|fib30|0.043s|0.053s|0.058s|0.076s|
-|fib35|0.475s|0.571s|0.597s|0.874s|
-|fib40|5.281s|6.421s|6.561s|9.677s|
-|loop 1e8|0.412s|0.654s|0.702s|1.109s|
-|global loop 1e8|0.760s|0.840s|0.93s|2.044s|
-|binary_trees|1.132s|1.752s|2.575s|1.996s|
-|instantiation|0.500s|0.519s|0.953s|0.945s|
-|invocation|0.203s|0.209s|0.22s|0.235s|
-|method_call|0.125s|0.129s|0.135s|0.167s|
-|properties|0.276s|0.286s|0.296s|0.377s|
-|trees|1.642s|3.042s|4.888s|3.553s|
-|zoo|0.264s|0.252s|0.238s|0.282s|
-|zoo_batch(10sec)|6323batch|—|6850batch|5398batch|
+|program|cloxBooster - [1.5.0]|cloxBooster - [1.4.1]|cloxBooster - [1.3.0]|cloxBooster - [1.0.0]|clox|
+|---|---|---|---|---|---|
+|fib30|0.041s|0.043s|0.053s|0.058s|0.076s|
+|fib35|0.464s|0.475s|0.571s|0.597s|0.874s|
+|fib40|5.181s|5.281s|6.421s|6.561s|9.677s|
+|loop 1e8|0.403s|0.412s|0.654s|0.702s|1.109s|
+|global loop 1e8|0.762s|0.760s|0.840s|0.93s|2.044s|
+|binary_trees|1.02s|1.132s|1.752s|2.575s|1.996s|
+|instantiation|0.334s|0.500s|0.519s|0.953s|0.945s|
+|invocation|0.195s|0.203s|0.209s|0.22s|0.235s|
+|method_call|0.116s|0.125s|0.129s|0.135s|0.167s|
+|properties|0.275s|0.276s|0.286s|0.296s|0.377s|
+|trees|1.624s|1.642s|3.042s|4.888s|3.553s|
+|zoo|0.274s|0.264s|0.252s|0.238s|0.282s|
+|zoo_batch(10sec)|6168batch|6323batch|—|6850batch|5398batch|
 
 ---
 
@@ -135,7 +136,7 @@ The project **cloxBooster** is based on `MIT`.
   - License: `MIT`
 
 ### Third-party
-  - [slabAllocator](third-party/slabAllocator) (Copyright (c) 2026 IMSDcrueoft, MIT License, [repository](https://github.com/IMSDcrueoft/Slab-Allocator)): a slab allocator used to speed up fixed-size object allocation. See `third-party/slabAllocator/LICENSE` for the full license text.
+  - [memAllocator](third-party/memAllocator) (Copyright (c) 2025-2026 IMSDcrueoft, MIT License, [repository](https://github.com/IMSDcrueoft), authored in-repo): a thin OS virtual-memory layer (`palloc_os`, `bits`) topped by a one-tier small-object slab arena (`arena_slab`, ≤256B size classes) used to speed up fixed-size object allocation. See `third-party/memAllocator/LICENSE` for the full license text.
   - See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full third-party notices.
 
 ## Other expectations

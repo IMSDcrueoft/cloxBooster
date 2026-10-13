@@ -107,14 +107,6 @@ typedef struct {
 	Value* values;
 } ValueArray;
 
-#define VALUEHOLES_EMPTY UINT32_MAX
-
-typedef struct {
-	uint32_t count;
-	uint32_t capacity;
-	uint32_t* holes;
-} ValueHoles;
-
 bool valuesEqual(Value a, Value b);
 void convert_adaptive_double(double value, char* buffer, uint32_t bufferSize);//buffer size should > 32
 void printValue(Value value);
@@ -122,11 +114,4 @@ void printValue_sys(Value value);
 
 void valueArray_init(ValueArray* array);
 void valueArray_write(ValueArray* array, Value value);
-void valueArray_writeAt(ValueArray* array, Value value, uint32_t index);
 void valueArray_free(ValueArray* array);
-
-void valueHoles_init(ValueHoles* holes);
-void valueHoles_free(ValueHoles* holes);
-void valueHoles_push(ValueHoles* holes, uint32_t index);
-void valueHoles_pop(ValueHoles* holes);
-uint32_t valueHoles_get(ValueHoles* holes);

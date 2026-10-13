@@ -13,6 +13,8 @@ static void print_help() {
 	printf("Commands:\n");
 	printf("/exit  - Exit the interpreter.\n");
 	printf("/eval  - Load file and run.\n");
+	printf("/mem   - Print memory statistics.\n");
+	printf("/reset - Reset VM state (globals, functions, pools are cleared).\n");
 	printf("/help  - Print this help message.\n");
 	printf("/clear - Clean console.\n");
 	printf("\nAbout:\n");
@@ -109,6 +111,13 @@ void repl() {
 			break;
 		}
 
+		//strip a leading UTF-8 BOM if present: PowerShell pipes prepend EF BB BF to the
+		//first line, which would otherwise be compiled as garbage source instead of
+		//matching a command (e.g. '/eval' would never be recognized)
+		if ((uint8_t)line[0] == 0xEF && (uint8_t)line[1] == 0xBB && (uint8_t)line[2] == 0xBF) {
+			memmove(line, line + 3, strlen(line + 3) + 1);
+		}
+
 		lineLen = (uint32_t)strlen(line);
 		if (lineLen > 1 && line[lineLen - 2] == '\\') {
 			line[lineLen - 2] = '\n';
@@ -125,12 +134,24 @@ void repl() {
 				if (match_string(line, "/exit")) {
 					break;
 				}
+				else if (match_string(line, "/mem")) {
+					log_malloc_info();
+					continue;
+				}
 				else if (match_string(line, "/help")) {
 					print_help();
 					continue;
 				}
 				else if (match_string(line, "/clear")) {
 					clear_console();
+					continue;
+				}
+				else if (match_string(line, "/reset")) {
+					uint64_t reclaimed = vm.bytesAllocated + vm.bytesAllocated_no_gc;
+					//full teardown + fresh state: used by the REPL /reset command
+					vm_free();
+					vm_init();
+					printf("vm reset: reclaimed %.1f KiB\n", (double)reclaimed / 1024.0);
 					continue;
 				}
 				else if (startsWith_string(line, "/eval ")) {

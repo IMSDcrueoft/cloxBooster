@@ -272,12 +272,9 @@ void freeObject(Obj* object) {
 	case OBJ_NATIVE:
 		FREE_NO_GC(ObjNative, object);
 		break;
-	case OBJ_STRING: {
-		ObjString* string = (ObjString*)object;
-		FREE_FLEX_NO_GC(ObjString, string, char, string->length + 1);//FAM object include'\0
-		break;
 	}
-	}
+	//OBJ_STRING never appears here: strings live in the string arena and are
+	//not linked into the object lists, the arena owns their lifetime
 }
 
 void freeObjects()
@@ -307,7 +304,53 @@ void freeObjects()
 	}
 }
 
+//format bytes with an auto-scaled unit, table style ("64.0 KiB")
+COLD_FUNCTION
+static void formatMemSize(char* buffer, size_t bufferSize, uint64_t bytes)
+{
+	double value = (double)bytes;
+	const char* unit = "B";
+
+	if (bytes >= 1024ull * 1024 * 1024) {
+		value /= 1024.0 * 1024 * 1024;
+		unit = "GiB";
+	}
+	else if (bytes >= 1024 * 1024) {
+		value /= 1024.0 * 1024;
+		unit = "MiB";
+	}
+	else if (bytes >= 1024) {
+		value /= 1024.0;
+		unit = "KiB";
+	}
+
+	snprintf(buffer, bufferSize, "%.1f %s", value, unit);
+}
+
+COLD_FUNCTION
 void log_malloc_info()
 {
-	mem_print_stats(NULL);
+	//the vm stack and the interned strings live in OS VA arenas outside the
+	//allocator, so their bytes never show up in the slab stats: report them
+	//in the same table style
+	char committed[32];
+	char reserved[32];
+	formatMemSize(committed, sizeof(committed), stackCommittedBytes());
+	formatMemSize(reserved, sizeof(reserved), arenaBump_capacity(&vm.stackArena));
+
+	char strCommitted[32];
+	char strReserved[32];
+	formatMemSize(strCommitted, sizeof(strCommitted), stringCommittedBytes());
+	formatMemSize(strReserved, sizeof(strReserved), arenaBump_capacity(&vm.stringArena));
+
+	printf(" vm stack           current\n");
+	printf("  committed   : %12s\n", committed);
+	printf("  reserved    : %12s\n", reserved);
+	printf("\n");
+	printf(" vm strings          current\n");
+	printf("  committed   : %12s\n", strCommitted);
+	printf("  reserved    : %12s\n", strReserved);
+	printf("\n");
+
+	arenaSlab_dumpStats(&arenaSlabDefault);
 }

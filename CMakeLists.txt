@@ -47,14 +47,15 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Third-party: the bundled slabAllocator (third-party/slabAllocator) speeds up
+# Third-party: the bundled memAllocator (third-party/memAllocator) speeds up
 # fixed-size object allocation; everything else is built-in.
 
 # Core library --------------------------------------------------------------
 set(CLOXBOOSTER_CORE_SOURCES
-  third-party/slabAllocator/includes/bits.c
-  third-party/slabAllocator/includes/palloc_os.c
-  third-party/slabAllocator/includes/arena_slab.c
+  third-party/memAllocator/bits.c
+  third-party/memAllocator/palloc_os.c
+  third-party/memAllocator/arena_bump.c
+  third-party/memAllocator/arena_slab.c
   src/file.c
   src/hash.c
   src/chunk.c
@@ -76,7 +77,7 @@ set(CLOXBOOSTER_CORE_SOURCES
 add_library(cloxBoosterCore STATIC ${CLOXBOOSTER_CORE_SOURCES})
 target_include_directories(cloxBoosterCore PUBLIC
   ${CMAKE_SOURCE_DIR}/src
-  ${CMAKE_SOURCE_DIR}/third-party/slabAllocator/includes
+  ${CMAKE_SOURCE_DIR}/third-party/memAllocator
 )
 # Slab statistics (arena_slab.c counters + dump) in Debug builds only; the
 # define changes Segment/ArenaSlabAllocator layout, so it must be consistent

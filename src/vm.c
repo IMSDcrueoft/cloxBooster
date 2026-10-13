@@ -9,6 +9,7 @@
 #include "file.h"
 #include "allocator.h"
 #include <time.h>
+#include <assert.h>
 
 #if DEBUG_TRACE_EXECUTION
 #include "debug.h"
@@ -28,6 +29,8 @@ static void stack_reset()
 	vm.stackTop = vm.stack;
 
 	//set all to nil
+	//the commit watermark only grows within one vm lifetime, so clearing up to
+	//it covers every slot ever written; slots above it were never touched
 	for (Value* ptr = vm.stack; ptr < vm.stackBoundary; ++ptr) {
 		*ptr = NIL_VAL;
 	}
@@ -77,35 +80,28 @@ void stack_push(Value value)
 	*vm.stackTop = value;
 
 	if (++vm.stackTop == vm.stackBoundary) {
-		ptrdiff_t oldCapacity = vm.stackBoundary - vm.stack;
-		uint32_t capacity = GROW_CAPACITY(oldCapacity);
+		//the old movable stack had to GROW_ARRAY (realloc) here and then re-fix
+		//every frame->slots and open upvalue->location (via slotsOffset /
+		//location_offset bookkeeping); the arena stack reserves fixed VA up
+		//front instead, so "growing" is only a lazy page commit and neither
+		//the re-fix passes nor the offset fields exist anymore
 
-		if (capacity > STACK_MAX_SIZE) {
+		//VA reservation exhausted: the last slot was written, the stack is full
+		size_t used = (size_t)((vm.stackTop - vm.stack) * sizeof(Value));
+		if (used >= vm.stackArena.capacity) {
 			runtimeError("Stack overflow.");
 			return;
 		}
 
-		// remind that we realloc the ptr, so we need to update all ptrRef unless we use index to record
-		Value* oldStack = vm.stack;
-		vm.stack = GROW_ARRAY_NO_GC(Value, vm.stack, oldCapacity, capacity);
-		vm.stackBoundary = vm.stack + capacity;		//need fresh
-		vm.stackTop = vm.stack + oldCapacity;		//need fresh
-
-		// since stack grow, we need to update all ptrRef to the stack, otherwise they will point to the old stack and cause errors
-		if (oldStack != vm.stack) {
-			// update all stack frames so it is safe now
-			for (int32_t i = vm.frameCount - 1; i >= 0; i--) {
-				CallFrame* frame = &vm.frames[i];
-				frame->slots = vm.stack + frame->slotsOffset;
-			}
-
-			// update all upvalues if needed
-			for (ObjUpvalue* upvalue = vm.openUpvalues;upvalue != NULL;upvalue = upvalue->next) {
-				if (upvalue->location_offset != CLOSED_OBJ_UPVALUE_LOCATION) {
-					upvalue->location = vm.stack + upvalue->location_offset;
-				}
-			}
+		//commit the next chunk lazily (must advance past stackTop, hence the
+		//extra chunk); failure means the stack cannot grow -> overflow
+		if (!arenaBump_ensureCommitted(&vm.stackArena, used + vm.stackArena.commitChunkSize)) {
+			runtimeError("Stack overflow.");
+			return;
 		}
+
+		//commitTop is a page-aligned byte offset; a page is a multiple of sizeof(Value)
+		vm.stackBoundary = (Value*)((char*)vm.stackArena.base + vm.stackArena.commitTop);
 	}
 }
 
@@ -151,10 +147,34 @@ void vm_init()
 
 	//init global
 	valueArray_init(&vm.constants);
-	valueHoles_init(&vm.constantHoles);
 
-	vm.stack = ALLOCATE_NO_GC(Value, STACK_INITIAL_SIZE);
-	vm.stackBoundary = vm.stack + STACK_INITIAL_SIZE;
+	//stack arena: reserve the full STACK_ARENA_SIZE of VA once (never moves)
+	//and commit the first chunk eagerly; the old heap stack (ALLOCATE_NO_GC of
+	//STACK_INITIAL_SIZE Values) is gone, growth is a lazy page commit now
+	//a non-NULL base here means the previous vm_free was skipped -> leaked bump segment
+	assert(vm.stackArena.base == NULL);
+	if (!arenaBump_init(&vm.stackArena, STACK_ARENA_SIZE, false, 0, 0)) {
+		fprintf(stderr, "Failed to reserve the vm stack arena.\n");
+		exit(1);
+	}
+
+	if (!arenaBump_ensureCommitted(&vm.stackArena, vm.stackArena.commitChunkSize)) {
+		fprintf(stderr, "Failed to commit the vm stack arena.\n");
+		exit(1);
+	}
+
+	vm.stack = (Value*)vm.stackArena.base;
+	vm.stackBoundary = (Value*)((char*)vm.stackArena.base + vm.stackArena.commitTop);
+
+	//string arena: reserve 512MiB of VA (committed lazily in 16KB steps); no
+	//eager commit needed - the first string allocation triggers it; strings
+	//are NOT counted in the accounting books anymore (same class as the stack
+	//arena and the grayStack)
+	assert(vm.stringArena.base == NULL);
+	if (!arenaBump_init(&vm.stringArena, STRING_ARENA_SIZE, false, 8, 16 * 1024)) {
+		fprintf(stderr, "Failed to reserve the vm string arena.\n");
+		exit(1);
+	}
 
 	stack_reset();
 
@@ -206,7 +226,6 @@ COLD_FUNCTION
 void vm_free()
 {
 	valueArray_free(&vm.constants);
-	valueHoles_free(&vm.constantHoles);
 
 	table_free(&vm.globals.fields);
 	stringTable_free(&vm.strings);
@@ -215,9 +234,11 @@ void vm_free()
 	vm.initString = NULL;
 	freeObjects();
 
-	//realease the stack
-	ptrdiff_t capacity = vm.stackBoundary - vm.stack;
-	FREE_ARRAY_NO_GC(Value, vm.stack, capacity);
+	//release the stack + string arenas (VA reservations + committed pages)
+	arenaBump_destroy(&vm.stackArena);
+	arenaBump_destroy(&vm.stringArena);
+	//any surviving bump reservation is a leak (e.g. an init without a matching destroy)
+	assert(arenaBump_liveSegments() == 0);
 	vm.stack = NULL;
 	vm.stackTop = NULL;
 	vm.stackBoundary = NULL;
@@ -238,21 +259,25 @@ uint32_t getConstantSize()
 	return vm.constants.count;
 }
 
+COLD_FUNCTION
+uint64_t stackCommittedBytes()
+{
+	return (uint64_t)arenaBump_committed(&vm.stackArena);
+}
+
+COLD_FUNCTION
+uint64_t stringCommittedBytes()
+{
+	return (uint64_t)vm.stringArena.commitTop;
+}
+
 //return the constant index
 uint32_t addConstant(Value value)
 {
-	uint32_t index = valueHoles_get(&vm.constantHoles);
-	if (index == VALUEHOLES_EMPTY) {
-		stack_push(value);//prevent GC errors
-		valueArray_write(&vm.constants, value);
-		stack_pop();
-		return vm.constants.count - 1;
-	}
-	else {
-		valueArray_writeAt(&vm.constants, value, index);
-		valueHoles_pop(&vm.constantHoles);
-		return index;
-	}
+	stack_push(value);//prevent GC errors
+	valueArray_write(&vm.constants, value);
+	stack_pop();
+	return vm.constants.count - 1;
 }
 
 HOT_FUNCTION
@@ -273,7 +298,6 @@ static bool call(ObjClosure* closure, int argCount) {
 	frame->ip = closure->function->chunk.code;
 	//-1 is for function itself
 	frame->slots = vm.stackTop - argCount - 1;
-	frame->slotsOffset = (ptrdiff_t)(frame->slots - vm.stack);
 
 	// clear extra args
 	if (argCount > closure->function->arity) {
@@ -373,8 +397,7 @@ static void bindMethod(ObjClass* klass, ObjString* name) {
 		stack_replace(OBJ_VAL(bound));
 	}
 	else {
-		//don't throw
-		//runtimeError("Undefined property '%s'.", name->chars);
+		//don't throw:unknown method reads nil
 		stack_replace(NIL_VAL);
 	}
 }
@@ -394,7 +417,7 @@ static ObjUpvalue* captureUpvalue(Value* local) {
 		return upvalue;
 	}
 
-	ObjUpvalue* createdUpvalue = newUpvalue(local, (ptrdiff_t)(local - vm.stack));
+	ObjUpvalue* createdUpvalue = newUpvalue(local);
 
 	//insert it
 	createdUpvalue->next = upvalue;
@@ -416,7 +439,7 @@ static void closeUpvalues(Value* last) {
 		//if one upValue closed,it's location is it's closed's pointer
 		upvalue->closed = *upvalue->location;
 		upvalue->location = &upvalue->closed;
-		upvalue->location_offset = CLOSED_OBJ_UPVALUE_LOCATION;
+		//upvalue->location_offset = CLOSED_OBJ_UPVALUE_LOCATION; //unused since the arena stack
 		vm.openUpvalues = upvalue->next;
 	}
 }
@@ -1076,9 +1099,6 @@ static InterpretResult run()
 
 		case OP_PRINT: {
 		label_op_print:
-#if DEBUG_MODE
-			printf("[print] ");
-#endif
 			printValue(stack_pop());
 			printf("\n");
 			NEXT_INSTRUCTION;

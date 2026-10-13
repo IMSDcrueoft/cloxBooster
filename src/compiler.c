@@ -353,6 +353,25 @@ static void patchJump(int32_t offset) {
 	currentChunk()->code[offset + 1] = (jump >> 8) & 0xff;
 }
 
+//patch a previously emitted jump to an arbitrary (forward) target position
+//used by do-while 'continue': the jump sites are known before the condition
+//is compiled, so they are backpatched to condStart once it exists
+//'jump' is the chunk position of the 2 operand bytes (as returned by emitJump);
+//the vm's READ_SHORT consumes those 2 bytes first, so at runtime ip already
+//sits at jump+2 before doing ip += offset. offset must therefore be measured
+//from jump+2: -2 skips the operand bytes themselves, -jump converts the
+//absolute target position into that runtime-relative distance
+static void patchJumpTo(int32_t jump, int32_t target) {
+	int32_t offset = target - jump - 2;
+
+	if (offset > UINT16_MAX) {
+		error("Too much code to jump over.");
+	}
+
+	currentChunk()->code[jump] = offset & 0xff;
+	currentChunk()->code[jump + 1] = (offset >> 8) & 0xff;
+}
+
 static void initCompiler(Compiler* compiler, FunctionType type) {
 	compiler->enclosing = current;
 	current = compiler;//must set now
@@ -931,7 +950,7 @@ static void forStatement() {
 	}
 
 	//record the loop
-	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount };
+	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount,.continueJumps = NULL,.continueJumpCount = 0,.isDoWhile = false };
 	loop.breakJumpCapacity = 8;
 	loop.breakJumps = ALLOCATE_NO_GC(int32_t, loop.breakJumpCapacity);
 	current->currentLoop = &loop;
@@ -1008,7 +1027,7 @@ static void whileStatement() {
 	int32_t exitJump = emitBranchJump(OP_JUMP_IF_FALSE_POP, condStart);
 
 	//record the loop
-	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount };
+	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount,.continueJumps = NULL,.continueJumpCount = 0,.isDoWhile = false };
 	loop.breakJumpCapacity = 8;
 	loop.breakJumps = ALLOCATE_NO_GC(int32_t, loop.breakJumpCapacity);
 	current->currentLoop = &loop;
@@ -1032,7 +1051,7 @@ static void whileStatement() {
 static void doWhileStatement() {
 	int32_t loopStart = currentChunk()->count;
 	//record the loop
-	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount };
+	LoopContext loop = (LoopContext){ .start = loopStart, .enclosing = current->currentLoop,.breakJumps = NULL,.breakJumpCount = 0 ,.enterParamCount = current->localCount,.continueJumps = NULL,.continueJumpCount = 0,.isDoWhile = true };
 	loop.breakJumpCapacity = 8;
 	loop.breakJumps = ALLOCATE_NO_GC(int32_t, loop.breakJumpCapacity);
 	current->currentLoop = &loop;
@@ -1042,6 +1061,15 @@ static void doWhileStatement() {
 	consume(TOKEN_WHILE, "Expect 'while' after 'do' to form a valid 'do-while'.");
 	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
 	int32_t condStart = currentChunk()->count;
+
+	//now that the condition position is known, route every 'continue' of this
+	//loop to the condition check (the body start would re-run the body and
+	//never re-evaluate the condition)
+	while (loop.continueJumpCount > 0) {
+		patchJumpTo(loop.continueJumps[--loop.continueJumpCount], condStart);
+	}
+	FREE_ARRAY_NO_GC(int32_t, loop.continueJumps, loop.continueJumpCapacity);
+
 	expression();
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
 	consume(TOKEN_SEMICOLON, "Expect ';' after 'do-while' loop.");
@@ -1095,7 +1123,33 @@ static void continueStatement() {
 	}
 
 	closeLoopLocals(current->currentLoop->enterParamCount);
-	emitLoop(current->currentLoop->start);
+
+	if (current->currentLoop->isDoWhile) {
+		//do-while: the condition check sits after the body and its position
+		//is not known yet, so jump forward and patch it to condStart later
+		//(jumping to loop.start would skip the condition -> infinite loop)
+		LoopContext* loop = current->currentLoop;
+
+		if (loop->continueJumpCount == loop->continueJumpCapacity) {
+			uint32_t oldCapacity = loop->continueJumpCapacity;
+			uint32_t newCapacity = GROW_CAPACITY(oldCapacity);
+
+			//capacity is uint16_t: 32768 << 1 wraps to 0, must check before the store
+			if (newCapacity > UINT16_MAX) {
+				error("Too many continue statements in one loop.");
+				return;
+			}
+
+			loop->continueJumpCapacity = (uint16_t)newCapacity;
+			loop->continueJumps = GROW_ARRAY_NO_GC(int32_t, loop->continueJumps, oldCapacity, newCapacity);
+		}
+
+		loop->continueJumps[loop->continueJumpCount++] = emitJump(OP_JUMP);
+	}
+	else {
+		emitLoop(current->currentLoop->start);
+	}
+
 	consume(TOKEN_SEMICOLON, "Expect ';' after 'continue'.");
 }
 

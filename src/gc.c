@@ -15,23 +15,6 @@ void markValue(Value value)
 	if (IS_OBJ(value)) markObject(AS_OBJ(value));
 }
 
-//static void markArray(ValueArray* array) {
-//	for (uint32_t i = 0; i < array->count; i++) {
-//		markValue(array->values[i]);
-//	}
-//}
-
-// static void blackenObject(Obj* object);
-//static void markConstants(ValueArray* array) {
-//	for (uint32_t i = 0; i < array->count; i++) {
-//		Value value = array->values[i];
-//		if (IS_OBJ(value)) {
-//			AS_OBJ(value)->isMarked = vm.gcMark;
-//			blackenObject(AS_OBJ(value));
-//		}
-//	}
-//}
-
 
 static void markRoots() {
 	for (Value* slot = vm.stack; slot < vm.stackTop; slot++) {
@@ -48,11 +31,8 @@ static void markRoots() {
 
 	markTable(&vm.globals.fields);
 	//the shared constants don't gc
-	//markConstants(&vm.constants);
 
 	markCompilerRoots();
-
-	//markObject((Obj*)vm.initString);
 }
 
 void markObject(Obj* object)
@@ -67,7 +47,6 @@ void markObject(Obj* object)
 	case OBJ_NATIVE:
 	case OBJ_STRING:
 		//don't join gc
-		//object->isMarked = true;
 		return;
 	}
 
@@ -103,8 +82,7 @@ static void blackenObject(Obj* object) {
 	}
 	case OBJ_CLOSURE: {
 		ObjClosure* closure = (ObjClosure*)object;
-		//no need
-		//markObject((Obj*)closure->function);
+		//no need to mark the function (functions don't join gc)
 
 		for (uint32_t i = 0; i < closure->upvalueCount; i++) {
 			markObject((Obj*)closure->upvalues[i]);
@@ -117,18 +95,8 @@ static void blackenObject(Obj* object) {
 		markObject((Obj*)bound->method);
 		break;
 	}
-	// //won't be here
-	//case OBJ_FUNCTION: {
-	//	ObjFunction* function = (ObjFunction*)object;
-	//	markObject((Obj*)function->name);
-
-	//	//I don't have this field in design
-	//	//markArray(&function->chunk.constants);
-	//	break;
-	//}
 	case OBJ_CLASS: {
 		ObjClass* klass = (ObjClass*)object;
-		//markObject((Obj*)klass->name);
 		markValue(klass->initializer);
 		markTable(&klass->methods);
 		break;
@@ -158,8 +126,6 @@ static void sweep() {
 
 	while (object != NULL) {
 		if (object->isMarked == vm.gcMark) {
-			//object->isMarked = false;//clear the mark
-
 			previous = object;
 			object = OBJ_PTR_GET_NEXT(object);
 		}
@@ -193,7 +159,6 @@ void garbageCollect()
 
 	markRoots();
 	traceReferences();
-	//tableRemoveWhite(&vm.strings);
 	sweep();
 	slab_trim();
 

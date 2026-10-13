@@ -8,32 +8,41 @@
 #include "compiler.h"
 #include "table.h"
 #include "object.h"
+#include "arena_bump.h"
 
 //the depth of call frames
 #define FRAMES_MAX 1024
-//customed vm stack begin size
-#define STACK_INITIAL_SIZE 4096
+//#define STACK_INITIAL_SIZE 4096 //unused since the arena stack: initial footprint is one 64KB commit chunk (= the old 4096 Values)
 #define STACK_MAX_SIZE (FRAMES_MAX * UINT8_COUNT) //the max stack size, if exceed this, we can be sure it's a stack overflow
+//vm stack arena: VA reserved once and NEVER moved, so growing the stack never
+//invalidates frame->slots or upvalue->location pointers (no re-fix pass needed);
+//physical memory is committed lazily in ARENA_BUMP_COMMIT_CHUNK steps
+#define STACK_ARENA_SIZE (STACK_MAX_SIZE * sizeof(Value))
+
+//vm string arena: same fixed-VA model as the stack arena; 512MiB reservation,
+//committed lazily in 16KB steps (a single oversized string commits more at once)
+#define STRING_ARENA_SIZE ((size_t)512 * 1024 * 1024)
 
 typedef struct {
 	ObjClosure* closure;
 	uint8_t* ip;
 	Value* slots; //first avilable slot
-	ptrdiff_t slotsOffset;// offset of the first slot in the vm stack, not a ptr, so that we can realloc the stack when needed
+	//ptrdiff_t slotsOffset;// offset of the first slot in the vm stack, not a ptr, so that we can realloc the stack when needed
+	//kept as a comment for future use: the stack now lives at a fixed arena base
+	//(ArenaBumpAllocator) that never moves, so frame pointers never go stale and
+	//no offset bookkeeping is needed; restore this field if the stack becomes movable again
 } CallFrame;
 
 typedef struct {
 	//a cache
 	Value* stack;
 	Value* stackTop;
-	//the edge of stack
+	//the only push boundary: the committed edge of the stack arena; crossing it
+	//means commit more pages or (at the VA end = stackArena.capacity) overflow
 	Value* stackBoundary;
 
 	// deduplicated global constant table
 	ValueArray constants;
-	// In order to repurpose the voids caused by GC
-	// create a constant void table to record and reuse
-	ValueHoles constantHoles;
 
 	//scripts
 	StringTable scripts;
@@ -83,6 +92,14 @@ typedef struct {
 	//frames
 	uint32_t frameCount;
 	CallFrame frames[FRAMES_MAX];
+
+	//fixed-base backing storage for the stack (VA never moves, lazy commit)
+	ArenaBumpAllocator stackArena;
+
+	//fixed-base backing storage for interned strings (append-only bump): all
+	//ObjString allocations come from here and the whole arena is released at
+	//vm exit; strings are NOT linked into the object lists anymore
+	ArenaBumpAllocator stringArena;
 } VM;
 
 typedef enum {
@@ -105,6 +122,11 @@ void stack_replace(Value val);
 uint32_t getConstantSize();
 //add a constant and get the index of it,i will handle it later
 uint32_t addConstant(Value value);
+
+//bytes of the vm stack arena currently committed (physical memory in use)
+uint64_t stackCommittedBytes();
+//bytes of the vm string arena currently committed (physical memory in use)
+uint64_t stringCommittedBytes();
 
 InterpretResult interpret(C_STR source);
 InterpretResult interpret_repl(C_STR source);

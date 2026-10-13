@@ -139,8 +139,5 @@
     <ClInclude Include="src\file.h">
       <Filter>cloxBooster\header</Filter>
     </ClInclude>
-    <ClInclude Include="third-party\slabAllocator\includes\bits.h" />
-    <ClInclude Include="third-party\slabAllocator\includes\palloc_os.h" />
-    <ClInclude Include="third-party\slabAllocator\includes\arena_slab.h" />
   </ItemGroup>
 </Project>

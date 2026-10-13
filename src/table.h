@@ -55,10 +55,10 @@ bool tableSet(Table* table, ObjString* key, Value value);
 bool tableDelete(Table* table, ObjString* key);
 void tableAddAll(Table* from, Table* to);
 
-//void tableRemoveWhite(Table* table);
 void markTable(Table* table);
 
 ObjString* tableFindString(StringTable* table, C_STR chars, uint32_t length, uint64_t hash);
+ObjString* tableFindConcatString(StringTable* table, C_STR charsA, uint32_t lengthA, C_STR charsB, uint32_t lengthB, uint64_t hash);
 
 void stringTable_init(StringTable* table);
 void stringTable_free(StringTable* table);
