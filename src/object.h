@@ -11,6 +11,9 @@
 
 //compress the ptr to 48bits
 #define COMPRESS_OBJ_HEADER 1
+#if UINTPTR_MAX != UINT64_MAX
+#undef COMPRESS_OBJ_HEADER
+#endif
 
 typedef enum {
 	//objects that don't gc
