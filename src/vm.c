@@ -22,9 +22,17 @@
 //the global shared vm
 VM vm;
 
+static void closeUpvalues(Value* last);
+
 COLD_FUNCTION
 static void stack_reset()
 {
+	//close open upvalues before clearing the stack: discarded/cended executions
+	//must not leave escaped closures pointing into reset stack slots
+	if (vm.openUpvalues != NULL) {
+		closeUpvalues(vm.stack);
+	}
+
 	//reset the pointer
 	vm.stackTop = vm.stack;
 
@@ -232,6 +240,8 @@ void vm_free()
 	numberTable_free(&vm.numbers);
 
 	vm.initString = NULL;
+	//the list is about to dangle: a following vm_init -> stack_reset must not walk it
+	vm.openUpvalues = NULL;
 	freeObjects();
 
 	//release the stack + string arenas (VA reservations + committed pages)
@@ -243,10 +253,9 @@ void vm_free()
 	vm.stackTop = NULL;
 	vm.stackBoundary = NULL;
 
-	vm.initString = NULL;
-
 	table_free(&vm.emptyClass.methods);
 
+	vm.frameCount = 0;
 #if LOG_MALLOC_INFO
 	slab_log_info();
 #endif
